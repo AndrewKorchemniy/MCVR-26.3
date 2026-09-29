@@ -3,8 +3,8 @@
 #include <iostream>
 
 #ifdef MCVR_ENABLE_XESS
-#include <xess/xess.h>
-#include <xess/xess_vk.h>
+#    include <xess/xess.h>
+#    include <xess/xess_vk.h>
 #endif
 
 namespace mcvr {
@@ -127,8 +127,8 @@ bool XeSSWrapper::queryOptimalInputResolution(VkInstance instance,
     xess_2d_t minRes = {};
     xess_2d_t maxRes = {};
 
-    xess_result_t result = xessGetOptimalInputResolution(ctx, &outRes, toXeSSQuality(qualityMode), &optimal, &minRes,
-                                                         &maxRes);
+    xess_result_t result =
+        xessGetOptimalInputResolution(ctx, &outRes, toXeSSQuality(qualityMode), &optimal, &minRes, &maxRes);
     if (result != XESS_RESULT_SUCCESS || optimal.x == 0 || optimal.y == 0) {
         xess_2d_t inputRes = {};
         result = xessGetInputResolution(ctx, &outRes, toXeSSQuality(qualityMode), &inputRes);
@@ -203,8 +203,8 @@ bool XeSSWrapper::resize(uint32_t renderWidth, uint32_t renderHeight, uint32_t d
 bool XeSSWrapper::dispatch(const XeSSInput &input) {
     if (!initialized_ || !contextCreated_ || input.commandBuffer == VK_NULL_HANDLE) { return false; }
 
-    if (!isImageValid(input.colorTexture) || !isImageValid(input.velocityTexture) || !isImageValid(input.outputTexture) ||
-        input.inputWidth == 0 || input.inputHeight == 0) {
+    if (!isImageValid(input.colorTexture) || !isImageValid(input.velocityTexture) ||
+        !isImageValid(input.outputTexture) || input.inputWidth == 0 || input.inputHeight == 0) {
         std::cerr << "[XeSS] Invalid execute input" << std::endl;
         return false;
     }
@@ -286,7 +286,10 @@ bool XeSSWrapper::initContextAndPipelines() {
 #endif
 }
 
-bool XeSSWrapper::initXeSS(uint32_t displayWidth, uint32_t displayHeight, XeSSQualityMode qualityMode, uint32_t initFlags) {
+bool XeSSWrapper::initXeSS(uint32_t displayWidth,
+                           uint32_t displayHeight,
+                           XeSSQualityMode qualityMode,
+                           uint32_t initFlags) {
 #ifndef MCVR_ENABLE_XESS
     (void)displayWidth;
     (void)displayHeight;
@@ -340,4 +343,4 @@ bool XeSSWrapper::isImageValid(const XeSSImage &image) {
            image.width > 0 && image.height > 0;
 }
 
-} // namespace mcvr
+}

@@ -8,6 +8,7 @@
 #include "util/ray_cone.glsl"
 #include "util/ray.glsl"
 #include "util/color_space.glsl"
+#include "util/sampling_helpers.glsl"
 #include "common/shared.hpp"
 
 layout(set = 0, binding = 0) uniform sampler2D textures[];
@@ -36,12 +37,7 @@ layout(set = 1, binding = 7) readonly buffer TextureMappingBuffer {
     TextureMapping mapping;
 };
 
-layout(set = 1, binding = 6) readonly buffer LastPositionBufferAddr {
-    uint64_t addrs[];
-}
-lastPositionBufferAddrs;
-
-layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer IndexBuffer {
+layout(std430, buffer_reference, buffer_reference_align = 4) readonly buffer IndexBuffer {
     uint indices[];
 }
 indexBuffer;
@@ -52,9 +48,9 @@ layout(location = 0) rayPayloadInEXT MainRay mainRay;
 hitAttributeEXT vec2 attribs;
 
 bool loadPreviousScenePos(uint geometryBufferIndex, uint primitiveID, vec3 baryCoords, out vec3 prevScenePos) {
-    uint64_t lastPositionAddr = lastPositionBufferAddrs.addrs[geometryBufferIndex];
-    uint64_t lastIndexAddr = lastIndexBufferAddrs.addrs[geometryBufferIndex];
-    if (lastPositionAddr == 0 || lastIndexAddr == 0) { return false; }
+    uint64_t lastPbrAddr = lastPbrBufferAddrs.addrs[geometryAddressIndex(geometryBufferIndex)];
+    uint64_t lastIndexAddr = lastIndexBufferAddrs.addrs[geometryAddressIndex(geometryBufferIndex)];
+    if (lastPbrAddr == 0 || lastIndexAddr == 0) { return false; }
 
     IndexBuffer lastIndexBuffer = IndexBuffer(lastIndexAddr);
     uint indexBaseID = 3u * primitiveID;
@@ -62,10 +58,10 @@ bool loadPreviousScenePos(uint geometryBufferIndex, uint primitiveID, vec3 baryC
     uint i1 = lastIndexBuffer.indices[indexBaseID + 1u];
     uint i2 = lastIndexBuffer.indices[indexBaseID + 2u];
 
-    PositionBuffer lastPositionBuffer = PositionBuffer(lastPositionAddr);
-    vec3 p0 = lastPositionBuffer.vertices[i0].pos;
-    vec3 p1 = lastPositionBuffer.vertices[i1].pos;
-    vec3 p2 = lastPositionBuffer.vertices[i2].pos;
+    EntityPBRBuffer lastPbrBuffer = EntityPBRBuffer(lastPbrAddr);
+    vec3 p0 = lastPbrBuffer.vertices[i0].pos;
+    vec3 p1 = lastPbrBuffer.vertices[i1].pos;
+    vec3 p2 = lastPbrBuffer.vertices[i2].pos;
     vec3 prevLocalPos = baryCoords.x * p0 + baryCoords.y * p1 + baryCoords.z * p2;
 
     mat4 lastModelMat = lastObjToWorldMats.mat[gl_InstanceCustomIndexEXT];
@@ -93,11 +89,14 @@ void main() {
     float pbrEmission = 0.0;
     if (hasTexture(m0.packedData)) {
         vec2 uv = bary.x * m0.textureUV + bary.y * m1.textureUV + bary.z * m2.textureUV;
-        albedo = sampleTexture(textures[nonuniformEXT(m0.textureID)], uv, 0.0, false);
+        albedo = resolveSurfaceTextureColor(sampleTexture(textures[nonuniformEXT(m0.textureID)], uv, 0.0, false), getAlphaMode(m0.packedData));
 
         int specularTextureID = mapping.entries[m0.textureID].specular;
         if (specularTextureID >= 0) {
-            vec4 specular = sampleTexture(textures[nonuniformEXT(specularTextureID)], uv, 0.0, false);
+            vec2 atlasUvMin = min(m0.textureUV, min(m1.textureUV, m2.textureUV));
+            vec2 atlasUvMax = max(m0.textureUV, max(m1.textureUV, m2.textureUV));
+            vec4 specular = samplePBRSpecularTexture(textures[nonuniformEXT(specularTextureID)], uv, atlasUvMin,
+                                                     atlasUvMax, 0.0, 0u);
             int intEmission = int(round(specular.a * 255.0));
             if (intEmission != 255) { pbrEmission = intEmission / 254.0; }
         }

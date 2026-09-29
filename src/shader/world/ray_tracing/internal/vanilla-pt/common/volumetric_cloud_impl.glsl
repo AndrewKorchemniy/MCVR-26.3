@@ -236,16 +236,14 @@ float volumetricCloudClearAmountScale() {
 
 float volumetricCloudClearCoverageDrift() {
     float t = cloudTime() * 24000.0;
-    float wave =
-        0.50 * sin(t * 0.00013) +
-        0.35 * sin(t * 0.000057 + 1.7) +
-        0.15 * sin(t * 0.000031 - 0.8);
+    float wave = 0.50 * sin(t * 0.00013) + 0.35 * sin(t * 0.000057 + 1.7) + 0.15 * sin(t * 0.000031 - 0.8);
     return 1.0 + 0.08 * wave;
 }
 
 float volumetricCloudMergedCoverageNoise(vec2 animatedWorldXZ, float scale, vec2 offset) {
     float coarse = texture(volumetricCloudCoverageNoiseTexture, animatedWorldXZ * scale + offset).x;
-    float merged = texture(volumetricCloudCoverageNoiseTexture, animatedWorldXZ * (scale * 0.57) + offset + vec2(0.173, -0.121)).x;
+    float merged =
+        texture(volumetricCloudCoverageNoiseTexture, animatedWorldXZ * (scale * 0.57) + offset + vec2(0.173, -0.121)).x;
     return mix(coarse, merged, 0.55);
 }
 
@@ -288,9 +286,7 @@ vec3 volumetricCloudPrimaryLightRadiance() {
     float sunScale = volumetricCloudSunDirectScale();
     float moonScale = volumetricCloudMoonDirectScale();
     float rainAttenuation = mix(1.0, 0.35, volumetricCloudRainBlend());
-    if (sunScale >= moonScale) {
-        return VPT_SUN_RADIANCE * sunScale * rainAttenuation;
-    }
+    if (sunScale >= moonScale) { return VPT_SUN_RADIANCE * sunScale * rainAttenuation; }
     return VPT_MOON_RADIANCE * moonScale * rainAttenuation;
 }
 
@@ -425,9 +421,8 @@ VolumetricCloudSampleContext prepareCloudLayer0(vec3 sampleWorldPos, float norma
 
     float combinedCoverage = max(cloudSaturate(localCoverage + weatherCoverage), overcastBlend * 0.60);
     context.coverage = cloudSaturate(coverageBase * combinedCoverage);
-    context.gradientShape =
-        cloudRemapClamped(layerHeight01, 0.10, 0.80, coverageBase * 1.9, 0.2) *
-        cloudRemapClamped(layerHeight01, 0.00, 0.10, 0.5, 1.0);
+    context.gradientShape = cloudRemapClamped(layerHeight01, 0.10, 0.80, coverageBase * 1.9, 0.2) *
+                            cloudRemapClamped(layerHeight01, 0.00, 0.10, 0.5, 1.0);
     context.normalizedHeight = normalizedHeight;
     context.layerHeight01 = layerHeight01;
     context.layerIndex = 0;
@@ -470,8 +465,7 @@ VolumetricCloudSampleContext prepareCloudLayer1(vec3 sampleWorldPos, float norma
     float combinedCoverage = max(cloudSaturate(localCoverage + weatherCoverage), overcastBlend * 0.36);
     context.coverage = cloudSaturate(coverageBase * combinedCoverage);
     context.gradientShape =
-        cloudRemapClamped(layerHeight01, 0.00, 0.01, 0.1, 1.0) *
-        cloudRemapClamped(layerHeight01, 0.10, 0.80, 0.7, 0.2);
+        cloudRemapClamped(layerHeight01, 0.00, 0.01, 0.1, 1.0) * cloudRemapClamped(layerHeight01, 0.10, 0.80, 0.7, 0.2);
     context.normalizedHeight = normalizedHeight;
     context.layerHeight01 = layerHeight01;
     context.layerIndex = 1;
@@ -494,8 +488,7 @@ VolumetricCloudSampleContext prepareCloudLayer2(vec3 sampleWorldPos, float norma
     posMeter += windDirection * layerHeight01 * 500.0;
     context.posKm = posMeter * 0.001;
 
-    vec3 curl =
-        texture(volumetricCloudCurlTexture, (time * cloudSpeed * 50.0 + posMeter.xz) * 0.00000125 + 0.7).xyz;
+    vec3 curl = texture(volumetricCloudCurlTexture, (time * cloudSpeed * 50.0 + posMeter.xz) * 0.00000125 + 0.7).xyz;
     curl = curl * 2.0 - 1.0;
     context.posKm += curl * 10.0;
 
@@ -513,8 +506,7 @@ VolumetricCloudSampleContext prepareCloudLayer2(vec3 sampleWorldPos, float norma
 
     context.coverage = cloudSaturate(coverageBase * (localCoverage + weatherCoverage));
     context.gradientShape =
-        cloudRemapClamped(layerHeight01, 0.00, 0.01, 0.1, 1.0) *
-        cloudRemapClamped(layerHeight01, 0.10, 0.20, 0.8, 0.5);
+        cloudRemapClamped(layerHeight01, 0.00, 0.01, 0.1, 1.0) * cloudRemapClamped(layerHeight01, 0.10, 0.20, 0.8, 0.5);
     context.normalizedHeight = normalizedHeight;
     context.layerHeight01 = layerHeight01;
     context.layerIndex = 2;
@@ -549,8 +541,9 @@ float sampleCloudDensityFromContext(VolumetricCloudSampleContext context) {
 
     if (context.layerIndex == 0) {
         float densityBase = VPT_VOLUMETRIC_CLOUD_DENSITY * mix(1.60, 2.10, volumetricCloudOvercastBlend());
-        float basicNoise =
-            texture(volumetricCloudBasicNoiseTexture, fract((context.posKm + context.windOffset) * VPT_VOLUMETRIC_CLOUD_BASE_SCALE)).r;
+        float basicNoise = texture(volumetricCloudBasicNoiseTexture,
+                                   fract((context.posKm + context.windOffset) * VPT_VOLUMETRIC_CLOUD_BASE_SCALE))
+                               .r;
         float basicCloudNoise = context.gradientShape * basicNoise;
         float basicCloudWithCoverage =
             context.coverage * cloudRemapClamped(basicCloudNoise, 1.0 - context.coverage, 1.0, 0.0, 1.0);
@@ -561,15 +554,13 @@ float sampleCloudDensityFromContext(VolumetricCloudSampleContext context) {
         float detailNoiseMixByHeight =
             0.2 * mix(detailNoiseComposite, 1.0 - detailNoiseComposite, cloudSaturate(context.layerHeight01 * 10.0));
 
-        float densityShape =
-            cloudSaturate(0.01 + (1.0 - context.layerHeight01) * 0.5) * 0.25 *
-            cloudRemapClamped(context.layerHeight01, 0.0, 0.3, 0.0, 1.0) *
-            cloudRemapClamped(context.layerHeight01, 0.7, 1.0, 1.0, 0.0);
+        float densityShape = cloudSaturate(0.01 + (1.0 - context.layerHeight01) * 0.5) * 0.25 *
+                             cloudRemapClamped(context.layerHeight01, 0.0, 0.3, 0.0, 1.0) *
+                             cloudRemapClamped(context.layerHeight01, 0.7, 1.0, 1.0, 0.0);
 
         float cloudDensity =
             densityShape * cloudRemapClamped(basicCloudWithCoverage, detailNoiseMixByHeight, 1.0, 0.0, 1.0);
-        cloudDensity =
-            pow(cloudDensity, cloudSaturate(1.0 - context.layerHeight01) * 0.4 + 0.1) * densityBase * 0.1;
+        cloudDensity = pow(cloudDensity, cloudSaturate(1.0 - context.layerHeight01) * 0.4 + 0.1) * densityBase * 0.1;
         return cloudSaturate(cloudDensity);
     }
 
@@ -583,22 +574,19 @@ float sampleCloudDensityFromContext(VolumetricCloudSampleContext context) {
             context.coverage * cloudRemapClamped(basicCloudNoise, 1.0 - context.coverage, 1.0, 0.0, 1.0);
 
         vec3 sampleDetailNoise = context.posKm - context.windOffset * 0.15;
-        float detailNoiseComposite = texture(
-                                         volumetricCloudDetailNoiseTexture,
-                                         fract(2.0 * sampleDetailNoise * VPT_VOLUMETRIC_CLOUD_DETAIL_SCALE))
+        float detailNoiseComposite = texture(volumetricCloudDetailNoiseTexture,
+                                             fract(2.0 * sampleDetailNoise * VPT_VOLUMETRIC_CLOUD_DETAIL_SCALE))
                                          .r;
         float detailNoiseMixByHeight =
             0.2 * mix(detailNoiseComposite, 1.0 - detailNoiseComposite, cloudSaturate(context.layerHeight01 * 10.0));
 
-        float densityShape =
-            cloudSaturate(0.01 + (1.0 - context.layerHeight01) * 0.5) * 0.1 *
-            cloudRemapClamped(context.layerHeight01, 0.0, 0.3, 0.0, 1.0) *
-            cloudRemapClamped(context.layerHeight01, 0.7, 1.0, 1.0, 0.0);
+        float densityShape = cloudSaturate(0.01 + (1.0 - context.layerHeight01) * 0.5) * 0.1 *
+                             cloudRemapClamped(context.layerHeight01, 0.0, 0.3, 0.0, 1.0) *
+                             cloudRemapClamped(context.layerHeight01, 0.7, 1.0, 1.0, 0.0);
 
         float cloudDensity =
             densityShape * cloudRemapClamped(basicCloudWithCoverage, detailNoiseMixByHeight, 1.0, 0.0, 1.0);
-        cloudDensity =
-            pow(cloudDensity, cloudSaturate(1.0 - context.layerHeight01) * 0.4 + 0.1) * densityBase * 0.1;
+        cloudDensity = pow(cloudDensity, cloudSaturate(1.0 - context.layerHeight01) * 0.4 + 0.1) * densityBase * 0.1;
         return cloudSaturate(cloudDensity);
     }
 
@@ -609,10 +597,9 @@ float sampleCloudDensityFromContext(VolumetricCloudSampleContext context) {
     float basicCloudWithCoverage =
         context.coverage * cloudRemapClamped(basicCloudNoise, 1.0 - context.coverage, 1.0, 0.0, 1.0);
 
-    float densityShape =
-        cloudSaturate(0.01 + (1.0 - context.layerHeight01) * 0.5) * 0.1 *
-        cloudRemapClamped(context.layerHeight01, 0.0, 0.3, 0.0, 1.0) *
-        cloudRemapClamped(context.layerHeight01, 0.7, 1.0, 1.0, 0.0);
+    float densityShape = cloudSaturate(0.01 + (1.0 - context.layerHeight01) * 0.5) * 0.1 *
+                         cloudRemapClamped(context.layerHeight01, 0.0, 0.3, 0.0, 1.0) *
+                         cloudRemapClamped(context.layerHeight01, 0.7, 1.0, 1.0, 0.0);
 
     return cloudSaturate(densityShape * basicCloudWithCoverage * densityBase);
 }
@@ -629,7 +616,8 @@ vec2 getParticipatingMediaPhase(float basePhase) {
     return vec2(basePhase, mix(uniformPhase, basePhase, 0.5));
 }
 
-vec2 marchCloudLightTransport(vec3 rayOrigin, vec3 rayDir, float maxDistance, int minimumSteps, float multiScatterExtinction) {
+vec2 marchCloudLightTransport(
+    vec3 rayOrigin, vec3 rayDir, float maxDistance, int minimumSteps, float multiScatterExtinction) {
     if (maxDistance <= 1e-3 || minimumSteps <= 0) { return vec2(1.0); }
 
     int stepCount = max(minimumSteps, 1);
@@ -655,7 +643,10 @@ vec2 marchCloudLightTransport(vec3 rayOrigin, vec3 rayDir, float maxDistance, in
     return vec2(singleScatter, multiScatter);
 }
 
-float volumetricCloudLightVisibility(vec3 absoluteWorldPos, vec3 lightDir, int minimumSteps, float multiScatterExtinction) {
+float volumetricCloudLightVisibility(vec3 absoluteWorldPos,
+                                     vec3 lightDir,
+                                     int minimumSteps,
+                                     float multiScatterExtinction) {
     if (VPT_CLOUD_MODE != 2u || VPT_VOLUMETRIC_CLOUD_CAST_SHADOW == 0) { return 1.0; }
 
     float horizonShadowWeight = smoothstep(0.06, 0.24, max(lightDir.y, 0.0));
@@ -789,8 +780,12 @@ float volumetricCloudHorizonMissMix(vec3 rayDir) {
     return 1.0 - smoothstep(0.0, 0.08, rayDir.y);
 }
 
-VolumetricCloudResult applyVolumetricCloudBudgeted(
-    vec3 rayOrigin, vec3 rayDir, vec3 skyBackgroundRadiance, int viewStepCount, int lightStepCount, int ambientStepCount) {
+VolumetricCloudResult applyVolumetricCloudBudgeted(vec3 rayOrigin,
+                                                   vec3 rayDir,
+                                                   vec3 skyBackgroundRadiance,
+                                                   int viewStepCount,
+                                                   int lightStepCount,
+                                                   int ambientStepCount) {
     VolumetricCloudResult result;
     result.color = skyBackgroundRadiance;
     result.transmittance = 1.0;
@@ -923,15 +918,12 @@ VolumetricCloudResult applyVolumetricCloudBudgeted(
         }
 
         float sampleRadius = clamp(length(samplePlanetPos), VPT_ATMOSPHERE_RG, VPT_ATMOSPHERE_RT);
-        vec3 sunAtmosphereTransmittance =
-            sampleCloudAtmosphereTransmittance(sampleRadius, dot(up, dominantLightDir));
+        vec3 sunAtmosphereTransmittance = sampleCloudAtmosphereTransmittance(sampleRadius, dot(up, dominantLightDir));
         float depthProbability =
-            pow(clamp(density * 8.0, 0.0, 1.0), cloudRemapClamped(context.layerHeight01, 0.3, 0.85, 0.5, 2.0)) +
-            0.05;
+            pow(clamp(density * 8.0, 0.0, 1.0), cloudRemapClamped(context.layerHeight01, 0.3, 0.85, 0.5, 2.0)) + 0.05;
         float verticalProbability = pow(cloudRemapClamped(context.layerHeight01, 0.07, 0.22, 0.1, 1.0), 0.8);
-        float powderEffect =
-            mix(1.0, powderEffectNew(depthProbability, verticalProbability, viewToLight),
-                clamp(VPT_VOLUMETRIC_CLOUD_POWDER_STRENGTH, 0.0, 1.0));
+        float powderEffect = mix(1.0, powderEffectNew(depthProbability, verticalProbability, viewToLight),
+                                 clamp(VPT_VOLUMETRIC_CLOUD_POWDER_STRENGTH, 0.0, 1.0));
 
         vec3 ambientIrradiance = sampleCloudAmbientIrradiance(up);
         vec3 topAmbientIrradiance = sampleCloudAmbientIrradianceUp();
@@ -994,7 +986,8 @@ VolumetricCloudResult applyVolumetricCloudBudgeted(
 
     vec3 cloudWorldPos = weightedWorldPos / weightedWorldPosWeight;
     float cloudDistance = max(dot(cloudWorldPos - rayOrigin, rayDir), 0.0);
-    VolumetricCloudAtmosphereSegmentResult airPerspective = integrateAtmosphereSegment(rayOrigin, rayDir, cloudDistance);
+    VolumetricCloudAtmosphereSegmentResult airPerspective =
+        integrateAtmosphereSegment(rayOrigin, rayDir, cloudDistance);
     scattering = scattering * airPerspective.transmittance + airPerspective.scatteredLight * (1.0 - transmittance);
 
     float fade = volumetricCloudHorizonFade(rayDir, cloudWorldPos, cloudDistance);
@@ -1022,10 +1015,8 @@ VolumetricCloudResult applyVolumetricCloudBudgeted(
 }
 
 VolumetricCloudResult applyVolumetricCloud(vec3 rayOrigin, vec3 rayDir, vec3 skyBackgroundRadiance) {
-    return applyVolumetricCloudBudgeted(rayOrigin, rayDir, skyBackgroundRadiance,
-                                        VPT_VOLUMETRIC_CLOUD_VIEW_STEPS,
-                                        VPT_VOLUMETRIC_CLOUD_LIGHT_STEPS,
-                                        VPT_VOLUMETRIC_CLOUD_AMBIENT_STEPS);
+    return applyVolumetricCloudBudgeted(rayOrigin, rayDir, skyBackgroundRadiance, VPT_VOLUMETRIC_CLOUD_VIEW_STEPS,
+                                        VPT_VOLUMETRIC_CLOUD_LIGHT_STEPS, VPT_VOLUMETRIC_CLOUD_AMBIENT_STEPS);
 }
 
 #endif

@@ -20,7 +20,7 @@ class Swapchain : public SharedObject<Swapchain> {
               std::shared_ptr<Window> window);
     ~Swapchain();
 
-    void reconstruct();
+    void reconstruct(bool recreateSurface = false);
     VkSwapchainKHR &vkSwapchain();
     VkExtent2D &vkExtent();
     VkExtent2D &vkMaxExtent();
@@ -44,4 +44,4 @@ class Swapchain : public SharedObject<Swapchain> {
 
     std::vector<std::shared_ptr<SwapchainImage>> swapchainImages_;
 };
-}; // namespace vk
+};

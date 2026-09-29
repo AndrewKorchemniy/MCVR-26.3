@@ -1,0 +1,386 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "color_space.glsl"
+#include "nrd_resolve_material.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_x_id = 1, local_size_y_id = 2) in;
+layout(constant_id = 0) const uint SECONDARY_PASS = 0;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D composedImage;
+layout(set = 0, binding = 1, rgb10_a2) uniform readonly image2D normalImage;
+layout(set = 0, binding = 2, r16f) uniform readonly image2D depthImage;
+layout(set = 0, binding = 3, rgba16f) uniform readonly image2D motionImage;
+layout(set = 0, binding = 4, rgba8) uniform readonly image2D materialImage;
+layout(set = 0, binding = 5, rgba16f) uniform image2D outputImage;
+layout(set = 0, binding = 9, rgba16f) uniform readonly image2D indirectImage;
+layout(set = 0, binding = 10, rgba8) uniform readonly image2D diffuseAlbedoMetallicImage;
+layout(set = 0, binding = 11, rgba16f) uniform readonly image2D transmissionMotionImage;
+layout(set = 0, binding = 12, r8) uniform readonly image2D confidenceImage;
+layout(std430, set = 0, binding = 7) readonly buffer Previous { uvec2 previous[]; };
+layout(std430, set = 0, binding = 8) writeonly buffer Next { uvec2 next[]; };
+layout(push_constant) uniform Mode {
+    uint hasPrevious;
+    float jitterDeltaX;
+    float jitterDeltaY;
+    vec4 currentRayX, currentRayY, currentRayOrigin;
+    vec4 previousRayX, previousRayY, previousRayOrigin;
+} mode;
+
+struct Sample {
+    vec4 color;
+    vec4 normalRoughness;
+    vec4 material;
+    vec4 motionDepth;
+    vec2 state;
+};
+const uint NEIGHBORHOOD_SIZE = (gl_WorkGroupSize.x + 4) * (gl_WorkGroupSize.y + 4);
+shared vec4 neighborhoodColor[NEIGHBORHOOD_SIZE];
+shared vec4 neighborhoodNormalRoughness[NEIGHBORHOOD_SIZE];
+shared vec4 neighborhoodMaterial[NEIGHBORHOOD_SIZE];
+shared float neighborhoodDepth[NEIGHBORHOOD_SIZE];
+bool finite1(float v) { return !isnan(v) && !isinf(v); }
+bool validDepth(float v) { return finite1(v) && v > 0 && v < 58953; }
+vec3 clean(vec3 v) {
+    return any(isnan(v)) || any(isinf(v)) ? vec3(0) : clamp(v, vec3(0), vec3(65504));
+}
+float luma(vec3 v) { return dot(max(v, vec3(0)), vec3(.2126, .7152, .0722)); }
+const float RESPONSE_LUMINANCE_FLOOR = SECONDARY_PASS == 0 ? 0.0001 : 0.01;
+float logLuma(vec3 v) { return log2(1 + luma(v) / RESPONSE_LUMINANCE_FLOOR); }
+float linearLuma(float v) { return (exp2(v) - 1) * RESPONSE_LUMINANCE_FLOOR; }
+int indexOf(ivec2 p) { return p.y * imageSize(composedImage).x + p.x; }
+int planeIndex(int i, int plane) {
+    ivec2 size = imageSize(composedImage);
+    return plane * size.x * size.y + i;
+}
+bool inside(ivec2 p) {
+    return all(greaterThanEqual(p, ivec2(0))) && all(lessThan(p, imageSize(composedImage)));
+}
+vec3 geometricNormal(ivec2 p, float depth, vec3 shadingNormal) {
+    ivec2 size = imageSize(depthImage);
+    vec3 ray = mode.currentRayOrigin.xyz + mode.currentRayX.xyz * p.x + mode.currentRayY.xyz * p.y;
+    vec3 center = ray * depth;
+    vec3 tangent[2];
+    for (int axis = 0; axis < 2; ++axis) {
+        ivec2 step = axis == 0 ? ivec2(1, 0) : ivec2(0, 1);
+        vec3 delta = axis == 0 ? mode.currentRayX.xyz : mode.currentRayY.xyz;
+        float before = imageLoad(depthImage, clamp(p - step, ivec2(0), size - 1)).r;
+        float after = imageLoad(depthImage, clamp(p + step, ivec2(0), size - 1)).r;
+        if (min(abs(before - depth), abs(after - depth)) > max(.02, depth * .02)) return shadingNormal;
+        vec3 a = center - (ray - delta) * before;
+        vec3 b = (ray + delta) * after - center;
+        tangent[axis] = dot(a, a) < dot(b, b) ? a : b;
+    }
+    vec3 normal = cross(tangent[0], tangent[1]);
+    float lengthSquared = dot(normal, normal);
+    if (!(lengthSquared > 1e-16)) return shadingNormal;
+    normal *= inversesqrt(lengthSquared);
+    float orientation = dot(normal, shadingNormal);
+    return abs(orientation) > .25 ? normal * (orientation < 0 ? -1 : 1) : shadingNormal;
+}
+Sample guide(ivec2 p) {
+    vec4 packed = imageLoad(normalImage, p);
+    float signedRoughness = packed.z * 2 - 1;
+    vec3 n = vec3(packed.x - packed.y, packed.x + packed.y - 1, 0);
+    n.z = (signedRoughness < 0 ? -1 : 1) * (1 - abs(n.x) - abs(n.y));
+    vec4 material = imageLoad(materialImage, p);
+    bool parallaxMaterial = material.a > .125 && material.a < .5;
+    float guideMaterial = round(packed.a * 3);
+    material.a = guideMaterial + (imageLoad(transmissionMotionImage, p).w > .5 ? 4 : 0);
+    if (SECONDARY_PASS != 0) {
+        if (guideMaterial != 0 && guideMaterial != 1)
+            material.rgb = imageLoad(diffuseAlbedoMetallicImage, p).rgb;
+        material.a = imageLoad(indirectImage, p).a >= 0 ? guideMaterial + 1 : 0;
+        if (material.a == 2) material.a += ILLUMINATION_HISTORY_FLAG;
+    }
+    if (SECONDARY_PASS == 0 && usesDiffuseIlluminationHistory(
+            packed, imageLoad(diffuseAlbedoMetallicImage, p), imageLoad(transmissionMotionImage, p).w))
+        material.a += ILLUMINATION_HISTORY_FLAG;
+    if (material.a == ILLUMINATION_HISTORY_FLAG && parallaxMaterial)
+        material.a += 4;
+    vec4 motionDepth = vec4(0, 0, 0, imageLoad(depthImage, p).r);
+    n = normalize(n);
+    if (material.a >= ILLUMINATION_HISTORY_FLAG && validDepth(motionDepth.w))
+        n = geometricNormal(p, motionDepth.w, n);
+    return Sample(vec4(0), vec4(n, abs(signedRoughness)), material, motionDepth, vec2(0));
+}
+bool materialCompatible(Sample a, Sample b) {
+    vec3 delta = a.material.rgb - b.material.rgb;
+    return a.material.a == b.material.a && dot(delta, delta) <= .04 &&
+           dot(a.normalRoughness.xyz, b.normalRoughness.xyz) >= .9 &&
+           (a.material.a >= ILLUMINATION_HISTORY_FLAG || abs(a.normalRoughness.w - b.normalRoughness.w) <= .1);
+}
+vec3 surfacePlane(vec3 normal, vec2 p, bool previousFrame) {
+    vec3 dx = previousFrame ? mode.previousRayX.xyz : mode.currentRayX.xyz;
+    vec3 dy = previousFrame ? mode.previousRayY.xyz : mode.currentRayY.xyz;
+    vec3 origin = previousFrame ? mode.previousRayOrigin.xyz : mode.currentRayOrigin.xyz;
+    vec2 slope = vec2(dot(normal, dx), dot(normal, dy));
+    return vec3(slope, dot(normal, origin) + dot(slope, p));
+}
+bool planeDepthCompatible(float a, float b, vec3 plane, vec2 offset) {
+    float projection = plane.z + dot(plane.xy, offset);
+    return validDepth(a) && validDepth(b) && plane.z * projection > 1e-12 &&
+           abs(a * plane.z - b * projection) <= max(.01, min(a, b) * .003) * max(abs(plane.z), abs(projection));
+}
+bool localCompatible(Sample a, Sample b, vec3 plane, ivec2 offset) {
+    if (SECONDARY_PASS != 0 && a.material.a == 2 + ILLUMINATION_HISTORY_FLAG && a.material.a == b.material.a) {
+        float projection = plane.z + dot(plane.xy, vec2(offset));
+        return dot(a.normalRoughness.xyz, b.normalRoughness.xyz) >= .5 &&
+            validDepth(a.motionDepth.w) && validDepth(b.motionDepth.w) && plane.z * projection > 1e-12 &&
+            abs(a.motionDepth.w * plane.z - b.motionDepth.w * projection) <=
+                max(.02, min(a.motionDepth.w, b.motionDepth.w) * .01) * max(abs(plane.z), abs(projection));
+    }
+    return materialCompatible(a, b) && planeDepthCompatible(a.motionDepth.w, b.motionDepth.w, plane, vec2(offset));
+}
+bool historyCompatible(Sample a, Sample b, vec2 position, ivec2 q) {
+    if (a.material.a >= ILLUMINATION_HISTORY_FLAG && a.material.a == b.material.a) {
+        vec3 plane = surfacePlane(b.normalRoughness.xyz, position, true);
+        float projection = plane.z + dot(plane.xy, vec2(q) - position);
+        float depth = a.motionDepth.w + a.motionDepth.z;
+        bool parallaxMaterial = a.material.a == 4 + ILLUMINATION_HISTORY_FLAG;
+        float depthTolerance = parallaxMaterial ? .10 :
+            (SECONDARY_PASS != 0 && a.material.a == 2 + ILLUMINATION_HISTORY_FLAG) ? .02 : .005;
+        return b.color.a > 0 && dot(a.normalRoughness.xyz, b.normalRoughness.xyz) >= (parallaxMaterial ? -.05 : .5) &&
+            validDepth(depth) && validDepth(b.motionDepth.w) && plane.z * projection > 1e-12 &&
+            abs(depth * plane.z - b.motionDepth.w * projection) <=
+                max(.02, min(depth, b.motionDepth.w) * depthTolerance) * max(abs(plane.z), abs(projection));
+    }
+    return b.color.a > 0 && materialCompatible(a, b) &&
+           planeDepthCompatible(a.motionDepth.w + a.motionDepth.z, b.motionDepth.w,
+                                surfacePlane(b.normalRoughness.xyz, position, true), vec2(q) - position);
+}
+uvec2 packColor(vec4 color) { return uvec2(packHalf2x16(color.xy), packHalf2x16(color.zw)); }
+vec4 unpackColor(uvec2 color) { return vec4(unpackHalf2x16(color.x), unpackHalf2x16(color.y)); }
+uint packNormal(vec4 normal) {
+    vec3 n = normal.xyz / max(dot(abs(normal.xyz), vec3(1)), 1e-8);
+    vec2 oct = n.xy;
+    if (n.z < 0) oct = (1 - abs(oct.yx)) * mix(vec2(-1), vec2(1), greaterThanEqual(oct, vec2(0)));
+    uvec2 xy = uvec2(round(clamp(oct * .5 + .5, 0, 1) * 1023));
+    uint roughness = uint(round(clamp(normal.w, 0, 1) * 255));
+    return xy.x | (xy.y << 10) | (roughness << 20);
+}
+vec4 unpackNormal(uint packed) {
+    vec2 oct = vec2(packed & 1023u, (packed >> 10) & 1023u) * (2.0 / 1023.0) - 1;
+    vec3 n = vec3(oct, 1 - abs(oct.x) - abs(oct.y));
+    float fold = clamp(-n.z, 0, 1);
+    n.xy += mix(vec2(fold), vec2(-fold), greaterThanEqual(n.xy, vec2(0)));
+    return vec4(normalize(n), float((packed >> 20) & 255u) / 255.0);
+}
+void storeHistory(int i, Sample s) {
+    next[i] = packColor(s.color);
+    uvec3 rgb = uvec3(round(clamp(s.material.rgb, 0.0, 1.0) * vec3(15, 63, 15)));
+    uint material = rgb.x | (rgb.y << 4) | (rgb.z << 10);
+    next[planeIndex(i, 1)] = uvec2(packNormal(s.normalRoughness) | (uint(round(s.material.a)) << 28),
+        packHalf2x16(vec2(s.motionDepth.w, 0.0)) | (material << 16));
+}
+Sample loadHistory(ivec2 p, bool diffuseIllumination) {
+    int i = indexOf(p);
+    uvec2 guideData = previous[planeIndex(i, 1)];
+    uint material = guideData.y >> 16;
+    vec4 color = vec4(vec3(material & 15, (material >> 4) & 63, (material >> 10) & 15) / vec3(15, 63, 15), float(guideData.x >> 28));
+    vec4 radiance = unpackColor(previous[i]);
+    return Sample(radiance, unpackNormal(guideData.x), color,
+        vec4(0, 0, 0, unpackHalf2x16(guideData.y).x),
+        vec2(diffuseIllumination ? 0.0 : logLuma(radiance.rgb), 0));
+}
+int neighborhoodIndex(ivec2 p) {
+    ivec2 local = p - ivec2(gl_WorkGroupID.xy * gl_WorkGroupSize.xy) + 2;
+    return local.y * int(gl_WorkGroupSize.x + 4) + local.x;
+}
+Sample localSample(ivec2 p) {
+    int i = neighborhoodIndex(p);
+    return Sample(neighborhoodColor[i], neighborhoodNormalRoughness[i], neighborhoodMaterial[i],
+                  vec4(0, 0, 0, neighborhoodDepth[i]), vec2(0));
+}
+vec3 resolveMaterialFactor(ivec2 p, Sample s) {
+    if (s.material.a >= ILLUMINATION_HISTORY_FLAG)
+        return max(imageLoad(diffuseAlbedoMetallicImage, p).rgb, vec3(.05));
+    return vec3(1);
+}
+void loadNeighborhood() {
+    ivec2 size = imageSize(composedImage), origin = ivec2(gl_WorkGroupID.xy * gl_WorkGroupSize.xy) - 2;
+    uint width = gl_WorkGroupSize.x + 4;
+    for (uint i = gl_LocalInvocationIndex; i < NEIGHBORHOOD_SIZE; i += gl_WorkGroupSize.x * gl_WorkGroupSize.y) {
+        ivec2 p = clamp(origin + ivec2(i % width, i / width), ivec2(0), size - 1);
+        Sample s = guide(p);
+        vec3 radiance = clean(imageLoad(indirectImage, p).rgb) / resolveMaterialFactor(p, s);
+        neighborhoodColor[i] = vec4(radiance, logLuma(radiance));
+        neighborhoodNormalRoughness[i] = s.normalRoughness;
+        neighborhoodMaterial[i] = s.material;
+        neighborhoodDepth[i] = s.motionDepth.w;
+    }
+    barrier();
+}
+
+Sample seed(ivec2 p) {
+    Sample s = localSample(p);
+    vec3 plane = surfacePlane(s.normalRoughness.xyz, vec2(p), false);
+    float center = s.color.a, sum = 0, sumSquared = 0, lower = 1e30;
+    vec2 upper = vec2(0);
+    vec3 colorSum = vec3(0);
+    int count = 0, support = 0;
+    bool smoothDielectric = SECONDARY_PASS == 0 && s.material.a == 0 && s.normalRoughness.w <= .12 &&
+        max(s.material.r, max(s.material.g, s.material.b)) < .1;
+    int stride = smoothDielectric ? 2 : 1;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 q = p + ivec2(x, y) * stride;
+            if (!inside(q)) continue;
+            Sample n = localSample(q);
+            if (!localCompatible(s, n, plane, q - p)) continue;
+            float value = n.color.a;
+            sum += value;
+            sumSquared += value * value;
+            colorSum += n.color.rgb;
+            lower = min(lower, value);
+            upper.y = max(upper.y, min(upper.x, value));
+            upper.x = max(upper.x, value);
+            support += abs(value - center) <= .15 ? 1 : 0;
+            ++count;
+        }
+    float limit = luma(s.color.rgb);
+    if (s.material.a >= ILLUMINATION_HISTORY_FLAG) {
+        if (count >= 3) s.color.rgb = mix(s.color.rgb, colorSum / float(count), .75);
+        float mean = sum / max(float(count), 1.0);
+        float sigma = sqrt(max(sumSquared / max(float(count), 1.0) - mean * mean, 0.0));
+        s.state = vec2(max(mean - 1.5 * sigma, 0), mean + 1.5 * sigma);
+        return s;
+    }
+    if (count >= 3) {
+        float trimmedSum = sum - upper.x;
+        float trimmedSquared = sumSquared - upper.x * upper.x;
+        float trimmedCount = float(count - 1);
+        if (count >= 5) {
+            trimmedSum -= lower + upper.y;
+            trimmedSquared -= lower * lower + upper.y * upper.y;
+            trimmedCount -= 2;
+        }
+        float mean = trimmedSum / trimmedCount;
+        float variance = trimmedSquared / trimmedCount - mean * mean;
+        float sigmaLog = sqrt(max(variance, 0));
+        float upperLog = mean + max(.18, 2.5 * sigmaLog);
+        limit = linearLuma(upperLog);
+        if (center > upperLog && support < 3)
+            s.color.rgb *= min(1.0, limit / max(luma(s.color.rgb), 1e-7));
+    }
+    if (smoothDielectric && count >= 3)
+        s.color.rgb = mix(s.color.rgb, colorSum / float(count), .75);
+    s.state.y = max(limit, luma(s.color.rgb));
+    return s;
+}
+
+Sample sampleHistory(vec2 position, Sample center) {
+    Sample h = center;
+    h.color = vec4(0);
+    h.state = vec2(0);
+    if (any(isnan(position)) || any(isinf(position)) || any(lessThan(position, vec2(-1))) ||
+        any(greaterThanEqual(position, vec2(imageSize(composedImage))))) return h;
+    ivec2 base = ivec2(floor(position));
+    vec2 f = fract(position);
+    float weight = 0;
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x) {
+            ivec2 q = base + ivec2(x, y);
+            float w = (x == 0 ? 1 - f.x : f.x) * (y == 0 ? 1 - f.y : f.y);
+            if (w <= 0) continue;
+            if (!inside(q)) { continue; }
+            Sample prev = loadHistory(q, center.material.a >= ILLUMINATION_HISTORY_FLAG);
+            if (!historyCompatible(center, prev, position, q)) { continue; }
+            h.color += prev.color * w;
+            h.state += prev.state * w;
+            weight += w;
+        }
+    if (weight > 1e-4) {
+        h.color /= weight;
+        h.state /= weight;
+    } else {
+        h.color = vec4(0);
+    }
+    return h;
+}
+
+void resolve(ivec2 p, Sample s, Sample h, float lightingChange) {
+    if (!validDepth(s.motionDepth.w) || (SECONDARY_PASS != 0 && s.material.a == 0)) {
+        s.color.a = 0;
+        storeHistory(indexOf(p), s);
+        if (SECONDARY_PASS == 0)
+            imageStore(outputImage, p, vec4(clean(imageLoad(composedImage, p).rgb), 1));
+        return;
+    }
+    vec2 illuminationBounds = s.state;
+    float currentLimit = s.state.y;
+    bool diffuseIllumination = s.material.a >= ILLUMINATION_HISTORY_FLAG;
+    s.state = vec2(diffuseIllumination ? 0.0 : logLuma(s.color.rgb), 0);
+    vec2 motion = s.motionDepth.xy;
+    s.color.a = 1;
+    if (mode.hasPrevious != 0) {
+        if (h.color.a > 0) {
+            float speed = length(motion);
+            float moving = smoothstep(.025, .25, speed);
+            float viewResponse = diffuseIllumination ? 0.0 : moving;
+            float maxHistory = mix(diffuseIllumination ? 96.0 : 128.0, diffuseIllumination ? 48.0 : 4.0, moving);
+            float age = min(h.color.a + 1.0, maxHistory);
+
+            float innovation = s.state.x - h.state.x;
+            float changed = diffuseIllumination ? lightingChange :
+                smoothstep(.35, .8, abs(innovation));
+            float responsive = max(viewResponse, changed);
+            if (diffuseIllumination && responsive > 0.0) {
+                illuminationBounds = vec2(linearLuma(illuminationBounds.x), linearLuma(illuminationBounds.y));
+                float currentLuma = luma(s.color.rgb), historyLuma = luma(h.color.rgb);
+                float margin = max(currentLuma, .001) * .02;
+                float lower = max(min(illuminationBounds.x, currentLuma) - margin, 0.0);
+                float upper = max(illuminationBounds.y, currentLuma) + margin;
+                float clippedLuma = clamp(historyLuma, lower, upper);
+                h.color.rgb *= mix(1.0, clippedLuma / max(historyLuma, 1e-8), responsive);
+            } else if (responsive > 0.0) {
+                vec3 plane = surfacePlane(s.normalRoughness.xyz, vec2(p), false);
+                vec3 mean = vec3(0), secondMoment = vec3(0);
+                float count = 0;
+                for (int y = -1; y <= 1; ++y)
+                    for (int x = -1; x <= 1; ++x) {
+                        ivec2 q = p + ivec2(x, y);
+                        if (!inside(q)) continue;
+                        Sample n = localSample(q);
+                        if (!localCompatible(s, n, plane, q - p)) continue;
+                        vec3 color = n.color.rgb * min(1.0, currentLimit / max(luma(n.color.rgb), 1e-7));
+                        mean += color;
+                        secondMoment += color * color;
+                        count += 1;
+                    }
+                mean /= max(count, 1);
+                secondMoment /= max(count, 1);
+                vec3 sigma = sqrt(max(secondMoment - mean * mean, vec3(0)));
+                vec3 margin = max(mean, vec3(.001)) * .02;
+                vec3 lower = max(min(mean - 1.5 * sigma, s.color.rgb) - margin, vec3(0));
+                vec3 upper = max(mean + 1.5 * sigma, s.color.rgb) + margin;
+                h.color.rgb = mix(h.color.rgb, clamp(h.color.rgb, lower, upper), responsive);
+            }
+            float alpha = max(1.0 / age, viewResponse * mix(.25, .5, clamp(speed, 0, 1)));
+            alpha = max(alpha, changed);
+            s.color.rgb = mix(h.color.rgb, s.color.rgb, alpha);
+            s.color.a = min(age, 1.0 / alpha);
+        }
+    }
+    storeHistory(indexOf(p), s);
+    vec4 indirect = imageLoad(indirectImage, p);
+    vec4 base = SECONDARY_PASS != 0 ? imageLoad(outputImage, p) : imageLoad(composedImage, p);
+    vec3 result = base.rgb + (s.color.rgb * resolveMaterialFactor(p, s) - indirect.rgb) * indirect.a;
+    float confidence = mode.hasPrevious != 0 ? 1.0 - lightingChange : 0.0;
+    float metadata = diffuseIllumination && base.a > .5 ? -1.0 - confidence : 1.0;
+    imageStore(outputImage, p, vec4(roundToFloat16(clean(result)), SECONDARY_PASS != 0 ? base.a : metadata));
+}
+void main() {
+    loadNeighborhood();
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    bool inBounds = inside(p);
+    Sample s = localSample(clamp(p, ivec2(0), imageSize(composedImage) - 1));
+    bool valid = inBounds && validDepth(s.motionDepth.w) && (SECONDARY_PASS == 0 || s.material.a != 0);
+    if (valid) s = seed(p);
+    Sample h = s;
+    h.color = vec4(0);
+    if (valid && mode.hasPrevious != 0) {
+        s.motionDepth.xyz = imageLoad(motionImage, p).xyz;
+        h = sampleHistory(vec2(p) + s.motionDepth.xy + vec2(mode.jitterDeltaX, mode.jitterDeltaY), s);
+    }
+    float response = 1.0 - imageLoad(confidenceImage, clamp(p, ivec2(0), imageSize(composedImage) - 1)).r;
+    if (inBounds) resolve(p, s, h, response);
+}

@@ -1,5 +1,6 @@
 #include "com_radiance_client_proxy_vulkan_PipelineStateProxy_ClearState.h"
 
+#include "core/profiler/profiler.hpp"
 #include "core/render/modules/ui_module.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
@@ -9,6 +10,7 @@
 extern "C" {
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_00024ClearState_setClearColor(
     JNIEnv *, jclass, jfloat red, jfloat green, jfloat blue, jfloat alpha) {
+    MCVR_PROFILE_SCOPE("jni.PipelineState.Clear.setClearColor");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();
@@ -18,6 +20,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_00024ClearState_setClearDepth(
     JNIEnv *, jclass, jdouble depth) {
+    MCVR_PROFILE_SCOPE("jni.PipelineState.Clear.setClearDepth");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();
@@ -27,6 +30,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_00024ClearState_setClearStencil(
     JNIEnv *, jclass, jint stencil) {
+    MCVR_PROFILE_SCOPE("jni.PipelineState.Clear.setClearStencil");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();

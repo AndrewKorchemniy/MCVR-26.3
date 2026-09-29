@@ -16,9 +16,7 @@ inline uint32_t parallelThreadCount(const char *envName = "MCVR_SHADER_PACK_BUIL
     if (rawValue != nullptr && rawValue[0] != '\0') {
         char *end = nullptr;
         long parsed = std::strtol(rawValue, &end, 10);
-        if (end != rawValue && parsed > 0) {
-            return static_cast<uint32_t>(std::min<long>(parsed, hardwareThreads));
-        }
+        if (end != rawValue && parsed > 0) { return static_cast<uint32_t>(std::min<long>(parsed, hardwareThreads)); }
     }
     return std::min(8u, hardwareThreads);
 }
@@ -57,4 +55,4 @@ void parallelFor(size_t count, Fn &&fn, const char *envName = "MCVR_SHADER_PACK_
     if (firstException != nullptr) { std::rethrow_exception(firstException); }
 }
 
-} // namespace mcvr
+}

@@ -2,6 +2,7 @@
 
 #include "core/all_extern.hpp"
 
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -85,10 +86,13 @@ class CommandBuffer : public SharedObject<CommandBuffer> {
 
   public:
     CommandBuffer(std::shared_ptr<Device> device, std::shared_ptr<CommandPool> commandPool_);
+    ~CommandBuffer();
 
     VkCommandBuffer &vkCommandBuffer();
 
     std::shared_ptr<CommandBuffer> begin(VkCommandBufferUsageFlags flags = 0);
+    size_t split();
+    std::span<const VkCommandBuffer> recordedSegments() const;
     std::shared_ptr<CommandBuffer> copyToDeviceLocalBuffer(std::shared_ptr<DeviceLocalBuffer> deviceLocalBuffer);
     std::shared_ptr<CommandBuffer> copyToDeviceLocalImage(std::shared_ptr<DeviceLocalImage> deviceLocalImage);
     std::shared_ptr<CommandBuffer> barriersBufferImage(std::vector<BufferMemoryBarrier> bufferBarriers,
@@ -98,6 +102,16 @@ class CommandBuffer : public SharedObject<CommandBuffer> {
     std::shared_ptr<CommandBuffer> endRenderPass();
     std::shared_ptr<CommandBuffer> bindDescriptorTable(std::shared_ptr<DescriptorTable> descriptorTable,
                                                        VkPipelineBindPoint bindPoint);
+    struct PushDescriptorBuffer {
+        uint32_t binding;
+        VkBuffer buffer;
+        VkDeviceSize size;
+        std::shared_ptr<Buffer> owner;
+    };
+    std::shared_ptr<CommandBuffer> pushDescriptorBuffers(std::shared_ptr<DescriptorTable> descriptorTable,
+                                                         VkPipelineBindPoint bindPoint,
+                                                         uint32_t set,
+                                                         std::vector<PushDescriptorBuffer> buffers);
     std::shared_ptr<CommandBuffer> bindGraphicsPipeline(std::shared_ptr<GraphicsPipeline> pipeline);
     std::shared_ptr<CommandBuffer> bindRTPipeline(std::shared_ptr<RayTracingPipeline> pipeline);
     std::shared_ptr<CommandBuffer> bindComputePipeline(std::shared_ptr<ComputePipeline> pipeline);
@@ -113,17 +127,51 @@ class CommandBuffer : public SharedObject<CommandBuffer> {
                                                uint32_t firstInstance = 0);
     std::shared_ptr<CommandBuffer>
     raytracing(std::shared_ptr<SBT> sbt, uint32_t width, uint32_t height, uint32_t depth);
+    std::shared_ptr<CommandBuffer> raytracingIndirect(std::shared_ptr<SBT> sbt, VkDeviceAddress indirectAddress);
+    std::shared_ptr<CommandBuffer>
+    beginDebugLabel(const char *name, float r = 0.20f, float g = 0.55f, float b = 1.0f, float a = 1.0f);
+    std::shared_ptr<CommandBuffer> endDebugLabel();
     std::shared_ptr<CommandBuffer> end();
     std::shared_ptr<CommandBuffer> reset(VkCommandBufferResetFlags flags = 0);
+
+    template <typename T>
+    void retainResource(std::shared_ptr<T> resource) {
+        if (resource != nullptr) { recordedResources_.emplace_back(std::move(resource)); }
+    }
+
+    void retainDescriptorTableResources(const std::shared_ptr<DescriptorTable> &descriptorTable);
 
     void submitMainQueueIndividual(std::shared_ptr<Device> device);
     void submitMainQueueIndividual(std::shared_ptr<Device> device, std::shared_ptr<Fence> fence);
     void submitMainQueue(std::shared_ptr<Device> device, SubmitInfo submitInfo);
+
+    class ScopedDebugLabel {
+      public:
+        ScopedDebugLabel(CommandBuffer &commandBuffer,
+                         const char *name,
+                         float r = 0.20f,
+                         float g = 0.55f,
+                         float b = 1.0f,
+                         float a = 1.0f);
+        ~ScopedDebugLabel();
+
+        ScopedDebugLabel(const ScopedDebugLabel &) = delete;
+        ScopedDebugLabel &operator=(const ScopedDebugLabel &) = delete;
+
+      private:
+        CommandBuffer *commandBuffer_;
+        bool active_;
+    };
 
   private:
     std::shared_ptr<Device> device_;
     std::shared_ptr<CommandPool> commandPool_;
 
     VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;
+    std::vector<VkCommandBuffer> segments_;
+    size_t segmentCount_ = 0;
+    VkCommandBufferUsageFlags usageFlags_ = 0;
+    bool insideRenderPass_ = false;
+    std::vector<std::shared_ptr<void>> recordedResources_;
 };
-}; // namespace vk
+};

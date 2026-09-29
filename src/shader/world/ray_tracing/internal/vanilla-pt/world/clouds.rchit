@@ -56,7 +56,7 @@ layout(set = 3, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
 layout(set = 3, binding = 4, rg16f) uniform image2D motionVectorImage;
 layout(set = 3, binding = 5, r16f) uniform image2D linearDepthImage;
 
-layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer IndexBuffer {
+layout(std430, buffer_reference, buffer_reference_align = 4) readonly buffer IndexBuffer {
     uint indices[];
 }
 indexBuffer;
@@ -95,11 +95,11 @@ void main() {
         normal = normalize(normal);
     }
     bool useColorLayer = hasColorLayer(m0.packedData);
-    vec3 colorLayer;
+    vec4 colorLayer;
     if (useColorLayer) {
-        colorLayer = (baryCoords.x * m0.colorLayer + baryCoords.y * m1.colorLayer + baryCoords.z * m2.colorLayer).rgb;
+        colorLayer = baryCoords.x * m0.colorLayer + baryCoords.y * m1.colorLayer + baryCoords.z * m2.colorLayer;
     } else {
-        colorLayer = vec3(1.0);
+        colorLayer = vec4(1.0);
     }
 
     bool useTexture = hasTexture(m0.packedData);
@@ -111,7 +111,8 @@ void main() {
 
     vec3 albedo = albedoSample.rgb;
     float alpha = albedoSample.a;
-    vec3 tint = albedo * colorLayer;
+    vec3 tint = albedo * colorLayer.rgb;
+    alpha *= colorLayer.a;
 
     LabPBRMat mat;
     mat.albedo = tint;
@@ -127,12 +128,10 @@ void main() {
 
     vec3 rayOrigin = worldPos;
 
-    // shadow ray for direct lighting
     vec3 sunDir = celestialSunDirection();
     vec3 sampledLightDir = sunDir;
     if (sampledLightDir.y < 0) { sampledLightDir = -sampledLightDir; }
 
-    // Clouds are mostly viewed from below; keep underside lit via two-sided + backlit response.
     float ndotl = dot(normal, sampledLightDir);
     float ndotv = dot(normal, viewDir);
     float frontLit = max(ndotl, 0.0);
@@ -145,29 +144,27 @@ void main() {
     shadowRay.throughput = vec3(1.0);
     shadowRay.insideBoat = 0u;
     shadowRay.pad0 = 0u;
-    traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT,
-                WORLD_MASK, // masks
-                0,          // sbtRecordOffset
-                0,          // sbtRecordStride
-                0,          // missIndex
-                rayOrigin, 0.001, sampledLightDir, 1000, 1);
+    traceRayEXT(topLevelAS, gl_RayFlagsNoneEXT, WORLD_MASK, 0, 0, 0, rayOrigin, 0.001, sampledLightDir, 1000, 1);
 
     vec3 lightContribution = shadowRay.radiance;
 
     float progress = skyUBO.rainGradient;
     vec3 lightRadiance = lightContribution * mainRay.throughput * lightBRDF;
     lightRadiance *= alpha * 0.65;
-    
+
     float dayFactor = smoothstep(-0.3, 0.3, sunDir.y);
     vec3 skyAmbient = texture(skyFull, normalize(viewDir)).rgb;
     vec3 rainyRadiance = mix(skyAmbient * 0.12, vec3(0.08), dayFactor);
     vec3 wetCloudRadiance = lightRadiance * mix(0.2, 0.35, dayFactor) + rainyRadiance;
-    mainRay.radiance += mix(lightRadiance, wetCloudRadiance, progress);
+    vec3 cloudRadiance = mix(lightRadiance, wetCloudRadiance, progress);
+    mainRay.radiance += cloudRadiance;
 
     mainRay.hitT = gl_HitTEXT;
-    mainRay.normal = vec3(0.0);
-    rayClearMaterial(mainRay);
-    raySetNoisy(mainRay, false);
+    mainRay.normal = normal;
+    mainRay.directLightRadiance = cloudRadiance;
+    rayStoreMaterial(mainRay, vec4(tint, alpha), vec3(0.04), 1.0, 0.0, 0.0, 1.0, 0.0);
+    raySetLobeType(mainRay, 0u);
+    raySetNoisy(mainRay, true);
     raySetSkipFog(mainRay, true);
     mainRay.hasPrevScenePos = 0u;
     raySetStop(mainRay, true);

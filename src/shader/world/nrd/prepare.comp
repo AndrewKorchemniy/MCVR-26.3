@@ -6,95 +6,1324 @@
 #include "common/shared.hpp"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(constant_id = 0) const uint NRD_MODE = 0;
+layout(constant_id = 1) const uint NRD_SH_ENABLED = 0;
+layout(constant_id = 2) const uint NRD_SEPARATE_DIRECT_ENABLED = 1;
 
-layout(set = 0, binding = 0, rgba16f) uniform readonly image2D directRadianceImage;
-layout(set = 0, binding = 1, rgba16f) uniform readonly image2D diffuseIndirectRadianceImage;
-layout(set = 0, binding = 2, rgba16f) uniform readonly image2D specularIndirectRadianceImage;
-layout(set = 0, binding = 3, rgba8) uniform readonly image2D diffuseAlbedoMetallicImage;
-layout(set = 0, binding = 4, rgba8) uniform readonly image2D specularAlbedoImage;
-layout(set = 0, binding = 5, rg16f) uniform readonly image2D motionVectorImage;
-layout(set = 0, binding = 6, rgba16f) uniform readonly image2D normalRoughnessImage;
-layout(set = 0, binding = 7, r16f) uniform readonly image2D linearDepthImage;
-layout(set = 0, binding = 8, rgba16f) uniform readonly image2D clearRadianceImage;
-layout(set = 0, binding = 9, r16f) uniform readonly image2D diffuseHitDepthImage;
-layout(set = 0, binding = 10, r16f) uniform readonly image2D specularHitDepthImage;
-layout(set = 0, binding = 11, rgba16f) uniform readonly image2D refractionRadianceImage;
-
-layout(set = 1, binding = 0, rgba16f) uniform writeonly image2D nrdDiffuseRadianceImage;
-layout(set = 1, binding = 1, rgba16f) uniform writeonly image2D nrdSpecularRadianceImage;
-layout(set = 1, binding = 2, rg16f) uniform writeonly image2D nrdMotionVectorImage;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D indirectDiffuseRadianceImage;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D indirectDiffuseDirectionImage;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D indirectSpecularRadianceImage;
+layout(set = 0, binding = 3, rgba16f) uniform readonly image2D indirectSpecularDirectionImage;
+layout(set = 0, binding = 4, rgba8) uniform readonly image2D sharedDiffuseAlbedoMetallicImage;
+layout(set = 0, binding = 5, rgba8) uniform readonly image2D sharedSpecularAlbedoImage;
+layout(set = 0, binding = 6, rg16f) uniform readonly image2D indirectGuideMotionImage;
+layout(set = 0, binding = 7, rgba16f) uniform readonly image2D indirectGuideNormalRoughnessImage;
+layout(set = 0, binding = 8, r16f) uniform readonly image2D indirectGuideDepthImage;
+layout(set = 0, binding = 9, rgba16f) uniform readonly image2D composeClearRadianceImage;
+layout(set = 0, binding = 10, r16f) uniform readonly image2D indirectDiffuseHitDistanceImage;
+layout(set = 0, binding = 11, r16f) uniform readonly image2D indirectSpecularHitDistanceImage;
+layout(set = 0, binding = 12, rgba16f) uniform readonly image2D directDiffuseRadianceImage;
+layout(set = 0, binding = 13, rgba16f) uniform readonly image2D directSpecularRadianceImage;
+layout(set = 0, binding = 14, r16f) uniform readonly image2D directHitDistanceImage;
+layout(set = 0, binding = 15, rgba16f) uniform readonly image2D composeBaseEmissionImage;
+layout(set = 0, binding = 16, rgba16f) uniform readonly image2D directLightGuideNormalRoughnessImage;
+layout(set = 0, binding = 17, rgba16f) uniform readonly image2D directLightGuideMotionDepthImage;
+layout(set = 0, binding = 18, rg8) uniform readonly image2D lightingResponseImage;
+#define NRD_LIGHTING_RESPONSE_READ
+#include "nrd_lighting_response.glsl"
+layout(set = 1, binding = 0, rgba16f) uniform writeonly image2D nrdIndirectDiffuseRadianceImage;
+layout(set = 1, binding = 1, rgba16f) uniform writeonly image2D nrdIndirectSpecularRadianceImage;
+layout(set = 1, binding = 2, rgba16f) uniform writeonly image2D nrdIndirectDiffuseSh0Image;
+layout(set = 1, binding = 3, rgba16f) uniform writeonly image2D nrdIndirectDiffuseSh1Image;
+layout(set = 1, binding = 4, rgba16f) uniform writeonly image2D nrdIndirectSpecularSh0Image;
+layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D nrdIndirectSpecularSh1Image;
+layout(set = 1, binding = 6, rgba16f) uniform writeonly image2D nrdIndirectMotionVectorImage;
 #if NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM
-layout(set = 1, binding = 3, rgb10_a2) uniform writeonly image2D nrdNormalRoughnessImage;
+layout(set = 1, binding = 7, rgb10_a2) uniform writeonly image2D nrdIndirectNormalRoughnessImage;
 #elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA8_UNORM
-layout(set = 1, binding = 3, rgba8) uniform writeonly image2D nrdNormalRoughnessImage;
+layout(set = 1, binding = 7, rgba8) uniform writeonly image2D nrdIndirectNormalRoughnessImage;
 #elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA8_SNORM
-layout(set = 1, binding = 3, rgba8_snorm) uniform writeonly image2D nrdNormalRoughnessImage;
+layout(set = 1, binding = 7, rgba8_snorm) uniform writeonly image2D nrdIndirectNormalRoughnessImage;
 #elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA16_UNORM
-layout(set = 1, binding = 3, rgba16) uniform writeonly image2D nrdNormalRoughnessImage;
+layout(set = 1, binding = 7, rgba16) uniform writeonly image2D nrdIndirectNormalRoughnessImage;
 #elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA16_SNORM
-layout(set = 1, binding = 3, rgba16_snorm) uniform writeonly image2D nrdNormalRoughnessImage;
+layout(set = 1, binding = 7, rgba16_snorm) uniform writeonly image2D nrdIndirectNormalRoughnessImage;
 #else
-#error Unsupported NRD normal encoding
+#    error Unsupported NRD normal encoding
 #endif
-layout(set = 1, binding = 4, r16f) uniform writeonly image2D nrdLinearDepthImage;
+layout(set = 1, binding = 8, r16f) uniform writeonly image2D nrdIndirectLinearDepthImage;
+layout(set = 1, binding = 9, rgba16f) uniform writeonly image2D nrdDirectDiffuseRadianceImage;
+layout(set = 1, binding = 10, rgba16f) uniform writeonly image2D nrdDirectSpecularRadianceImage;
+layout(set = 1, binding = 11, r8) uniform writeonly image2D nrdDirectDisocclusionThresholdMixImage;
+layout(set = 1, binding = 12, r8) uniform writeonly image2D nrdIndirectDisocclusionThresholdMixImage;
+layout(set = 1, binding = 13, r8) uniform image2D nrdDirectConfidenceImage;
+layout(set = 1, binding = 14, r8) uniform writeonly image2D nrdIndirectConfidenceImage;
+layout(set = 1, binding = 15, rgba16f) uniform writeonly image2D nrdDirectMotionVectorImage;
+#if NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM
+layout(set = 1, binding = 16, rgb10_a2) uniform writeonly image2D nrdDirectNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA8_UNORM
+layout(set = 1, binding = 16, rgba8) uniform writeonly image2D nrdDirectNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA8_SNORM
+layout(set = 1, binding = 16, rgba8_snorm) uniform writeonly image2D nrdDirectNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA16_UNORM
+layout(set = 1, binding = 16, rgba16) uniform writeonly image2D nrdDirectNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA16_SNORM
+layout(set = 1, binding = 16, rgba16_snorm) uniform writeonly image2D nrdDirectNormalRoughnessImage;
+#else
+#    error Unsupported NRD normal encoding
+#endif
+layout(set = 1, binding = 17, r16f) uniform writeonly image2D nrdDirectLinearDepthImage;
+layout(set = 1, binding = 18, rgba8) uniform writeonly image2D nrdIndirectBaseColorMetalnessImage;
+layout(set = 1, binding = 19, rgba16f) uniform writeonly image2D nrdDiffuseMotionVectorImage;
+layout(set = 1, binding = 21, r16f) uniform writeonly image2D nrdDiffuseDepthImage;
+#if NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_R10G10B10A2_UNORM
+layout(set = 1, binding = 20, rgb10_a2) uniform writeonly image2D nrdDiffuseNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA8_UNORM
+layout(set = 1, binding = 20, rgba8) uniform writeonly image2D nrdDiffuseNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA8_SNORM
+layout(set = 1, binding = 20, rgba8_snorm) uniform writeonly image2D nrdDiffuseNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA16_UNORM
+layout(set = 1, binding = 20, rgba16) uniform writeonly image2D nrdDiffuseNormalRoughnessImage;
+#elif NRD_NORMAL_ENCODING == NRD_NORMAL_ENCODING_RGBA16_SNORM
+layout(set = 1, binding = 20, rgba16_snorm) uniform writeonly image2D nrdDiffuseNormalRoughnessImage;
+#endif
 
 layout(set = 2, binding = 0) uniform WorldUniform {
     WorldUBO worldUBO;
 };
+layout(set = 2, binding = 1) uniform PreviousWorldUniform {
+    WorldUBO previousWorldUBO;
+};
+layout(set = 2, binding = 2) uniform SkyUniform {
+    SkyUBO skyUBO;
+};
 
-const vec4 gDiffHitDistParams = vec4(3.0, 0.1, 20.0, -25.0);
-const vec4 gSpecHitDistParams = vec4(3.0, 0.1, 20.0, -25.0);
+layout(push_constant) uniform NrdMode {
+    uint shEnabled;
+    uint separateDirectEnabled;
+    uint frameIndex;
+    uint nrdMode;
+}
+nrdMode;
+
 const float NRD_INF_DEPTH = 65504.0;
+const float NRD_RELAX_MAX_RADIANCE = 250.0;
+
+const float NRD_HALF_RATE_ENVIRONMENT_MATERIAL = 3.0;
+const vec4 REBLUR_HIT_DISTANCE_PARAMETERS = vec4(3.0, 0.1, 20.0, -25.0);
+const float NRD_GLOSSY_FIREFLY_MAX_DIRECT_ROUGHNESS = 0.35;
+const float NRD_GLOSSY_FIREFLY_NORMAL_THRESHOLD = 0.90;
+const float NRD_GLOSSY_FIREFLY_ROUGHNESS_TOLERANCE = 0.15;
+const int NRD_GLOSSY_FIREFLY_MIN_NEIGHBORS = 3;
+const int NRD_GLOSSY_FIREFLY_COHERENT_SUPPORT = 3;
+const uint NRD_FIREFLY_INDIRECT_SPECULAR = 0u;
+const uint NRD_FIREFLY_DIRECT_SPECULAR = 1u;
+const uint NRD_FIREFLY_TRANSMISSION_DIFFUSE = 2u;
+const int NRD_DIFFUSE_RECONSTRUCTION_RADIUS = 2;
+const int NRD_DIFFUSE_RECONSTRUCTION_SOURCE_TILE_WIDTH = 32 + 2 * NRD_DIFFUSE_RECONSTRUCTION_RADIUS;
+const int NRD_DIFFUSE_RECONSTRUCTION_TILE_WIDTH = NRD_DIFFUSE_RECONSTRUCTION_SOURCE_TILE_WIDTH / 2;
+const int NRD_DIFFUSE_RECONSTRUCTION_TILE_HEIGHT = 16 + 2 * NRD_DIFFUSE_RECONSTRUCTION_RADIUS;
+const int NRD_DIFFUSE_RECONSTRUCTION_TILE_COUNT =
+    NRD_DIFFUSE_RECONSTRUCTION_TILE_WIDTH * NRD_DIFFUSE_RECONSTRUCTION_TILE_HEIGHT;
+const int NRD_DIFFUSE_RECONSTRUCTION_MIN_SAMPLES = 3;
+const float NRD_DIFFUSE_RECONSTRUCTION_NORMAL_THRESHOLD = 0.90;
+const float NRD_DIFFUSE_RECONSTRUCTION_DEPTH_SCALE = 0.003;
+const float NRD_DIFFUSE_RECONSTRUCTION_MIN_DEPTH_TOLERANCE = 0.01;
+
+shared vec4 nrdDiffuseReconstructionIrradiance[400];
+shared vec4 nrdDiffuseReconstructionNormalDepth[400];
+shared vec4 nrdDiffuseReconstructionMaterial[400];
+
+struct NrdDirectGuide {
+    vec3 normal;
+    float roughness;
+    vec2 motion;
+    float depth;
+    float previousDepth;
+    bool valid;
+    bool terminal;
+};
+
+NrdDirectGuide loadNrdTransmissionGuide(ivec2 pixel);
+
+bool reconstructNrdSplitPair(ivec2 pixel, ivec2 size, bool specularSignal, vec3 normal, float depth,
+                             inout vec4 inputRadiance, inout float hitDistance, inout vec3 direction);
 
 vec3 safeDiv(vec3 a, vec3 b) {
-    return a / max(b, vec3(1e-3));
+    vec3 result = a / max(b, vec3(1e-3));
+    if (any(isnan(result)) || any(isinf(result))) { return vec3(0.0); }
+    return clamp(result, vec3(0.0), vec3(NRD_FP16_MAX));
 }
 
-void main() {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(directRadianceImage);
-    if (pixel.x >= size.x || pixel.y >= size.y) return;
+vec3 sanitizeRelaxRadiance(vec3 radiance) {
+    if (any(isnan(radiance)) || any(isinf(radiance))) { return vec3(0.0); }
+    return clamp(radiance, vec3(0.0), vec3(NRD_RELAX_MAX_RADIANCE));
+}
 
-    float linearDepth = imageLoad(linearDepthImage, pixel).r;
-    bool invalidDepth = isnan(linearDepth) || isinf(linearDepth) || linearDepth >= NRD_INF_DEPTH * 0.9;
-    bool needDenoise = imageLoad(clearRadianceImage, pixel).a == 0.0 && !invalidDepth;
-    if (!needDenoise) {
-        imageStore(nrdDiffuseRadianceImage, pixel, vec4(0.0));
-        imageStore(nrdSpecularRadianceImage, pixel, vec4(0.0));
-        imageStore(nrdMotionVectorImage, pixel, vec4(0.0));
-        imageStore(nrdNormalRoughnessImage, pixel, vec4(0.0, 1.0, 0.0, 1.0));
-        imageStore(nrdLinearDepthImage, pixel, vec4(min(linearDepth, NRD_INF_DEPTH), 0.0, 0.0, 0.0));
+float sanitizeNrdRadianceComponent(float value) {
+    if (isnan(value)) { return 0.0; }
+    if (isinf(value)) { return value > 0.0 ? NRD_FP16_MAX : 0.0; }
+    return clamp(value, 0.0, NRD_FP16_MAX);
+}
+
+vec3 sanitizeNrdRadiance(vec3 radiance) {
+    return vec3(sanitizeNrdRadianceComponent(radiance.r), sanitizeNrdRadianceComponent(radiance.g),
+                sanitizeNrdRadianceComponent(radiance.b));
+}
+
+float nrdRadianceLuminance(vec3 radiance) {
+    return dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+}
+
+bool isFiniteNrd(float value) {
+    return !isnan(value) && !isinf(value);
+}
+
+bool isFiniteNrd(vec3 value) {
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+bool isFiniteNrd(vec4 value) {
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+vec3 normalizeNrdSafe(vec3 value, vec3 fallback) {
+    float lengthSquared = dot(value, value);
+    if (!isFiniteNrd(value) || !isFiniteNrd(lengthSquared) || lengthSquared <= 1e-10) { return fallback; }
+    return value * inversesqrt(lengthSquared);
+}
+
+vec3 reconstructNrdWorldViewDirection(ivec2 pixel, ivec2 extent) {
+    vec2 pixelCenter = vec2(pixel) + vec2(0.5) + worldUBO.cameraJitter;
+    vec2 ndc = pixelCenter / vec2(extent) * 2.0 - 1.0;
+    vec4 viewRay = worldUBO.cameraProjMatInv * vec4(ndc, 0.0, 1.0);
+    if (!isFiniteNrd(viewRay) || abs(viewRay.w) <= 1e-8) { return vec3(0.0, 0.0, 1.0); }
+    viewRay /= viewRay.w;
+    vec3 worldRay = vec3(worldUBO.cameraEffectedViewMatInv * vec4(viewRay.xyz, 0.0));
+    return normalizeNrdSafe(-worldRay, vec3(0.0, 0.0, 1.0));
+}
+
+bool reconstructNrdWorldPosition(ivec2 pixel, float viewDepth, ivec2 extent, out vec3 position) {
+    position = vec3(0.0);
+    if (!isFiniteNrd(viewDepth) || viewDepth <= 0.0 || viewDepth >= NRD_INF_DEPTH * 0.9) { return false; }
+
+    vec2 pixelCenter = vec2(pixel) + vec2(0.5) + worldUBO.cameraJitter;
+    vec2 ndc = pixelCenter / vec2(extent) * 2.0 - 1.0;
+    vec4 viewRay = worldUBO.cameraProjMatInv * vec4(ndc, 0.0, 1.0);
+    if (!isFiniteNrd(viewRay) || abs(viewRay.w) <= 1e-8) { return false; }
+    viewRay /= viewRay.w;
+    float rayViewDepth = -viewRay.z;
+    if (!isFiniteNrd(rayViewDepth) || rayViewDepth <= 1e-8) { return false; }
+
+    vec4 relativePosition = worldUBO.cameraEffectedViewMatInv * vec4(viewRay.xyz * (viewDepth / rayViewDepth), 1.0);
+    if (!isFiniteNrd(relativePosition) || abs(relativePosition.w) <= 1e-8) { return false; }
+    position = relativePosition.xyz / relativePosition.w;
+    return isFiniteNrd(position);
+}
+
+bool loadNrdGlossyGuide(ivec2 pixel, bool directSignal, out vec3 normal, out float roughness, out float viewDepth) {
+    if (directSignal) {
+        vec4 directNormalRoughness = imageLoad(directLightGuideNormalRoughnessImage, pixel);
+        vec4 directMotionDepth = imageLoad(directLightGuideMotionDepthImage, pixel);
+        float normalLengthSquared = dot(directNormalRoughness.xyz, directNormalRoughness.xyz);
+        bool directValid = isFiniteNrd(directNormalRoughness) && isFiniteNrd(directMotionDepth) &&
+                           directMotionDepth.z > 0.0 && directMotionDepth.z < NRD_INF_DEPTH * 0.9 &&
+                           directMotionDepth.w > 0.0 && directMotionDepth.w < NRD_INF_DEPTH * 0.9 &&
+                           normalLengthSquared > 1e-8;
+        if (directValid) {
+            normal = directNormalRoughness.xyz * inversesqrt(normalLengthSquared);
+            roughness = clamp(directNormalRoughness.w - (directNormalRoughness.w > 1.5 ? 2.0 : 0.0), 0.0, 1.0);
+            viewDepth = directMotionDepth.z;
+            return true;
+        }
+    }
+
+    vec4 indirectNormalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    float indirectDepth = imageLoad(indirectGuideDepthImage, pixel).r;
+    float normalLengthSquared = dot(indirectNormalRoughness.xyz, indirectNormalRoughness.xyz);
+    if (!isFiniteNrd(indirectNormalRoughness) || !isFiniteNrd(indirectDepth) || indirectDepth <= 0.0 ||
+        indirectDepth >= NRD_INF_DEPTH * 0.9 || normalLengthSquared <= 1e-8) {
+        normal = vec3(0.0, 1.0, 0.0);
+        roughness = 1.0;
+        viewDepth = NRD_INF_DEPTH;
+        return false;
+    }
+    normal = indirectNormalRoughness.xyz * inversesqrt(normalLengthSquared);
+    roughness = clamp(indirectNormalRoughness.w, 0.0, 1.0);
+    viewDepth = indirectDepth;
+    return true;
+}
+
+vec4 loadNrdGlossySignal(ivec2 pixel, bool directSignal) {
+    return directSignal ? imageLoad(directSpecularRadianceImage, pixel) :
+                          imageLoad(indirectSpecularRadianceImage, pixel);
+}
+
+ivec2 nrdDiffuseReconstructionTileOrigin() {
+    return ivec2(int(gl_WorkGroupID.x) * 32 - NRD_DIFFUSE_RECONSTRUCTION_RADIUS,
+                 int(gl_WorkGroupID.y) * 16 - NRD_DIFFUSE_RECONSTRUCTION_RADIUS);
+}
+
+void stageNrdDiffuseReconstructionTile(ivec2 extent) {
+    int packedWidth = (extent.x + 1) / 2;
+    bool activeWorkgroup = int(gl_WorkGroupID.x) * 16 < packedWidth && int(gl_WorkGroupID.y) * 16 < extent.y;
+    if (!activeWorkgroup) { return; }
+
+    ivec2 tileOrigin = nrdDiffuseReconstructionTileOrigin();
+    for (uint tileIndex = gl_LocalInvocationIndex; tileIndex < uint(NRD_DIFFUSE_RECONSTRUCTION_TILE_COUNT);
+         tileIndex += 256u) {
+        int tileX = int(tileIndex) % NRD_DIFFUSE_RECONSTRUCTION_TILE_WIDTH;
+        int tileY = int(tileIndex) / NRD_DIFFUSE_RECONSTRUCTION_TILE_WIDTH;
+        int sampleY = tileOrigin.y + tileY;
+        int checkerParity = (abs(sampleY) & 1) ^ (abs(tileOrigin.x) & 1) ^ int(nrdMode.frameIndex & 1u);
+        ivec2 samplePixel = tileOrigin + ivec2(tileX * 2 + checkerParity, tileY);
+        vec4 sampleIrradiance = vec4(0.0);
+        vec4 sampleNormalDepth = vec4(0.0);
+        vec4 sampleMaterial = vec4(0.0);
+
+        bool inBounds = all(greaterThanEqual(samplePixel, ivec2(0))) && all(lessThan(samplePixel, extent));
+        if (inBounds) {
+            vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, samplePixel);
+            float viewDepth = imageLoad(indirectGuideDepthImage, samplePixel).r;
+            float normalLengthSquared = dot(normalRoughness.xyz, normalRoughness.xyz);
+            bool guideValid = isFiniteNrd(normalRoughness) && isFiniteNrd(viewDepth) && viewDepth > 0.0 &&
+                              viewDepth < NRD_INF_DEPTH * 0.9 && normalLengthSquared > 1e-8;
+            if (guideValid) {
+                vec3 normal = normalRoughness.xyz * inversesqrt(normalLengthSquared);
+                bool transparent = imageLoad(sharedSpecularAlbedoImage, samplePixel).a > 0.5;
+                bool transmissionAlbedo = false;
+                sampleNormalDepth = vec4(normal, transparent ? -viewDepth : viewDepth);
+                if (NRD_MODE == 2u && transparent && normalRoughness.w < 0.12) {
+                    NrdDirectGuide transmissionGuide = loadNrdTransmissionGuide(samplePixel);
+                    transmissionAlbedo = transmissionGuide.valid;
+                    if (transmissionAlbedo)
+                        sampleNormalDepth = vec4(transmissionGuide.normal, -transmissionGuide.depth);
+                }
+                sampleMaterial =
+                    vec4(imageLoad(sharedSpecularAlbedoImage, samplePixel).rgb, clamp(normalRoughness.w, 0.0, 1.0));
+
+                if (transmissionAlbedo) sampleMaterial.a += 2.0;
+
+                vec4 sampleInput = imageLoad(indirectDiffuseRadianceImage, samplePixel);
+                if (NRD_MODE == 2u && transparent && normalRoughness.w < 0.12) {
+                    float distance = imageLoad(indirectDiffuseHitDistanceImage, samplePixel).r;
+                    vec3 direction = vec3(0.0);
+                    reconstructNrdSplitPair(samplePixel, extent, false, normal, viewDepth,
+                                            sampleInput, distance, direction);
+                }
+                bool sampleValid = isFiniteNrd(sampleInput) && sampleInput.a > 0.0;
+                if (sampleValid) {
+                    vec3 albedo = max(imageLoad(sharedDiffuseAlbedoMetallicImage, samplePixel).rgb, vec3(0.05));
+                    if (NRD_MODE == 2u && transparent && normalRoughness.w < 0.12 && !transmissionAlbedo)
+                        albedo = vec3(1.0);
+                    sampleIrradiance = vec4(safeDiv(sanitizeNrdRadiance(sampleInput.rgb), albedo), 1.0);
+
+                }
+            }
+        }
+        nrdDiffuseReconstructionIrradiance[tileIndex] = sampleIrradiance;
+        nrdDiffuseReconstructionNormalDepth[tileIndex] = sampleNormalDepth;
+        nrdDiffuseReconstructionMaterial[tileIndex] = sampleMaterial;
+    }
+    memoryBarrierShared();
+    barrier();
+}
+
+vec3 nrdSpecularMaterialFactor(
+    ivec2 pixel, ivec2 extent, vec3 normal, float roughness, vec4 specularMaterial, bool transparentMaterial) {
+    if (transparentMaterial) { return vec3(1.0); }
+
+    vec3 diffuseFactor;
+    vec3 specularFactor;
+    vec3 viewDirection = reconstructNrdWorldViewDirection(pixel, extent);
+    vec3 diffuseAlbedo = clamp(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.0), vec3(1.0));
+    vec3 reflectionF0 = clamp(specularMaterial.rgb, vec3(0.0), vec3(1.0));
+    NRD_MaterialFactors(normal, viewDirection, diffuseAlbedo, reflectionF0, clamp(roughness, 0.0, 1.0), diffuseFactor,
+                        specularFactor);
+    return max(specularFactor, vec3(1e-3));
+}
+
+vec3 suppressIsolatedGlossyFirefly(ivec2 pixel,
+                                   vec3 centerDemodulatedRadiance,
+                                   vec3 centerNormal,
+                                   float centerRoughness,
+                                   float centerDepth,
+                                   uint signalKind,
+                                   bool centerTransparent,
+                                   NrdDirectGuide centerTerminal) {
+    bool directSignal = signalKind == NRD_FIREFLY_DIRECT_SPECULAR;
+    bool transmissionDiffuse = signalKind == NRD_FIREFLY_TRANSMISSION_DIFFUSE;
+    if ((directSignal && centerRoughness > NRD_GLOSSY_FIREFLY_MAX_DIRECT_ROUGHNESS) || isnan(centerRoughness) ||
+        isinf(centerRoughness)) {
+        return centerDemodulatedRadiance;
+    }
+
+    float roughnessWeight = smoothstep(0.0, 1.0, centerRoughness);
+    float candidateMinimumLuminance =
+        directSignal ? (centerTransparent ?
+                            0.01 :
+                            mix(0.20, 1.0, smoothstep(0.0, NRD_GLOSSY_FIREFLY_MAX_DIRECT_ROUGHNESS, centerRoughness))) :
+                       (centerTransparent ? 0.003 : mix(0.005, 0.02, roughnessWeight));
+    float isolatedGlossyFloor = centerRoughness <= 0.25 ? mix(0.0005, 0.002, smoothstep(0.0, 0.25, centerRoughness)) :
+                                                          mix(0.005, 0.02, roughnessWeight);
+    float minimumLuminance = !directSignal && !centerTransparent ? isolatedGlossyFloor : candidateMinimumLuminance;
+    float centerLuminance = nrdRadianceLuminance(centerDemodulatedRadiance);
+    if (isnan(centerLuminance) || isinf(centerLuminance) || centerLuminance <= candidateMinimumLuminance) {
+        return centerDemodulatedRadiance;
+    }
+
+    ivec2 extent = imageSize(indirectSpecularRadianceImage);
+    vec3 centerPosition;
+    if (!reconstructNrdWorldPosition(pixel, centerDepth, extent, centerPosition)) { return centerDemodulatedRadiance; }
+
+    const int neighborCapacity = NRD_MODE == 2u ? 8 : 24;
+    float neighborLuminances[neighborCapacity];
+    int neighborCount = 0;
+    int coherentSupport = 0;
+    int terminalSupport = 0;
+    vec3 centerTerminalPosition = vec3(0);
+    if (transmissionDiffuse) {
+        if (!centerTerminal.valid ||
+            !reconstructNrdWorldPosition(pixel, centerTerminal.depth, extent, centerTerminalPosition))
+            return centerDemodulatedRadiance;
+    }
+    int noClampSupport = 0;
+    bool medianOnly = !directSignal && !centerTransparent && centerRoughness <= 0.25;
+    float noClampScale = medianOnly ? 1.05 : (directSignal ? 1.25 : mix(1.00, 1.15, roughnessWeight));
+    const ivec2 offsets[8] = ivec2[8](ivec2(-2, 0), ivec2(2, 0), ivec2(-1, -1), ivec2(1, -1),
+                                             ivec2(-1, 1), ivec2(1, 1), ivec2(0, -2), ivec2(0, 2));
+    const int sampleCount = NRD_MODE == 2u ? (directSignal || transmissionDiffuse ? 8 : 6) : 25;
+    for (int tap = 0; tap < sampleCount; ++tap) {
+        if (NRD_MODE != 2u && tap == 12) continue;
+        ivec2 offset = NRD_MODE == 2u ? offsets[tap] : ivec2(tap % 5 - 2, tap / 5 - 2);
+        ivec2 samplePixel = pixel + offset;
+        if (any(lessThan(samplePixel, ivec2(0))) || any(greaterThanEqual(samplePixel, extent))) { continue; }
+
+        vec4 sampleInput = transmissionDiffuse ? imageLoad(indirectDiffuseRadianceImage, samplePixel) :
+                                                loadNrdGlossySignal(samplePixel, directSignal);
+        if (sampleInput.a <= 0.0 || !isFiniteNrd(sampleInput)) continue;
+        vec3 sampleNormal;
+        float sampleRoughness;
+        float sampleDepth;
+        if (!loadNrdGlossyGuide(samplePixel, directSignal, sampleNormal, sampleRoughness, sampleDepth) ||
+            abs(sampleRoughness - centerRoughness) >
+                (directSignal ? 0.10 : NRD_GLOSSY_FIREFLY_ROUGHNESS_TOLERANCE)) {
+            continue;
+        }
+        if (dot(centerNormal, sampleNormal) < (directSignal ? 0.95 : NRD_GLOSSY_FIREFLY_NORMAL_THRESHOLD)) {
+            continue;
+        }
+
+        bool sampleTransparent = imageLoad(sharedSpecularAlbedoImage, samplePixel).a > 0.5;
+        if (sampleTransparent != centerTransparent) { continue; }
+
+        vec3 samplePosition;
+        if (!reconstructNrdWorldPosition(samplePixel, sampleDepth, extent, samplePosition)) { continue; }
+        vec3 positionDelta = samplePosition - centerPosition;
+        float planeTolerance = 0.025 + max(min(centerDepth, sampleDepth), 0.0) * 0.005;
+        if (abs(dot(positionDelta, centerNormal)) > planeTolerance ||
+            abs(dot(positionDelta, sampleNormal)) > planeTolerance) {
+            continue;
+        }
+
+        if (transmissionDiffuse) {
+            if (NRD_MODE != 2u || !sampleTransparent || sampleRoughness >= 0.12) continue;
+            NrdDirectGuide sampleTerminal = loadNrdTransmissionGuide(samplePixel);
+            if (!sampleTerminal.valid) continue;
+            vec3 sampleTerminalPosition;
+            if (sampleTerminal.valid && dot(centerTerminal.normal, sampleTerminal.normal) >= .9 &&
+                reconstructNrdWorldPosition(samplePixel, sampleTerminal.depth, extent, sampleTerminalPosition)) {
+                vec3 terminalDelta = sampleTerminalPosition - centerTerminalPosition;
+                float terminalTolerance = .025 + min(centerTerminal.depth, sampleTerminal.depth) * .005;
+                if (abs(dot(terminalDelta, centerTerminal.normal)) <= terminalTolerance &&
+                    abs(dot(terminalDelta, sampleTerminal.normal)) <= terminalTolerance && ++terminalSupport >= 2)
+                    return centerDemodulatedRadiance;
+            }
+        }
+        vec4 sampleSpecularMaterial = imageLoad(sharedSpecularAlbedoImage, samplePixel);
+        vec3 sampleSpecularFactor = nrdSpecularMaterialFactor(samplePixel, extent, sampleNormal, sampleRoughness,
+                                                              sampleSpecularMaterial, sampleTransparent);
+        vec3 sampleFactor = transmissionDiffuse ? max(imageLoad(sharedDiffuseAlbedoMetallicImage, samplePixel).rgb, vec3(.05)) :
+                                                 sampleSpecularFactor;
+        vec3 sampleDemodulatedRadiance = safeDiv(sanitizeNrdRadiance(sampleInput.rgb), sampleFactor);
+        float sampleLuminance = nrdRadianceLuminance(sampleDemodulatedRadiance);
+        if (isnan(sampleLuminance) || isinf(sampleLuminance)) { continue; }
+        neighborLuminances[neighborCount++] = max(sampleLuminance, 0.0);
+        coherentSupport += sampleLuminance >= centerLuminance * 0.25 ? 1 : 0;
+        if (centerTransparent) {
+            if (coherentSupport >= NRD_GLOSSY_FIREFLY_COHERENT_SUPPORT) return centerDemodulatedRadiance;
+        } else {
+            noClampSupport += sampleLuminance * noClampScale >= centerLuminance ? 1 : 0;
+            if (noClampSupport >= (medianOnly ? neighborCapacity / 2 + 1 : neighborCapacity / 4)) return centerDemodulatedRadiance;
+        }
+    }
+    if (neighborCount < (directSignal ? 5 : (transmissionDiffuse ? 2 : NRD_GLOSSY_FIREFLY_MIN_NEIGHBORS)) ||
+        (centerTransparent && coherentSupport >= NRD_GLOSSY_FIREFLY_COHERENT_SUPPORT)) {
+        return centerDemodulatedRadiance;
+    }
+
+    for (int i = 1; i < neighborCount; ++i) {
+        float key = neighborLuminances[i];
+        int j = i - 1;
+        while (j >= 0 && neighborLuminances[j] > key) {
+            neighborLuminances[j + 1] = neighborLuminances[j];
+            --j;
+        }
+        neighborLuminances[j + 1] = key;
+    }
+    float localMedian = neighborLuminances[(neighborCount - 1) / 2];
+    float luminanceLimit;
+    if (directSignal && centerTransparent) {
+        luminanceLimit =
+            max(minimumLuminance,
+                localMedian * mix(4.0, 8.0, smoothstep(0.0, NRD_GLOSSY_FIREFLY_MAX_DIRECT_ROUGHNESS, centerRoughness)));
+    } else if (centerTransparent) {
+        luminanceLimit = max(minimumLuminance, localMedian * mix(3.0, 6.0, roughnessWeight));
+    } else if (!directSignal && centerRoughness <= 0.25) {
+        luminanceLimit = max(minimumLuminance, localMedian * 1.05);
+    } else {
+        float upperQuartile = neighborLuminances[(neighborCount * 3) / 4];
+        float medianScale = directSignal ? mix(2.0, 4.0, roughnessWeight) : mix(1.15, 2.5, roughnessWeight);
+        float quartileScale = directSignal ? 1.25 : mix(1.00, 1.15, roughnessWeight);
+        luminanceLimit = max(minimumLuminance, max(localMedian * medianScale, upperQuartile * quartileScale));
+    }
+    if (NRD_MODE == 2u && !centerTransparent && centerRoughness <= .10 && coherentSupport >= 2)
+        luminanceLimit = max(luminanceLimit, centerLuminance * .25);
+    if (centerLuminance <= luminanceLimit) { return centerDemodulatedRadiance; }
+    return centerDemodulatedRadiance * (luminanceLimit / max(centerLuminance, 1e-6));
+}
+
+vec3 nrdDiffuseSurfacePlane(ivec2 pixel, vec3 normal) {
+    vec2 pixelScale = 2.0 / vec2(imageSize(indirectGuideDepthImage));
+    vec2 ndc = (vec2(pixel) + 0.5 + worldUBO.cameraJitter) * pixelScale - 1.0;
+    vec4 view = worldUBO.cameraProjMatInv * vec4(ndc, 0.0, 1.0);
+    mat3 toWorld = mat3(worldUBO.cameraEffectedViewMatInv) / -view.z;
+    vec3 ray = toWorld * view.xyz;
+    vec3 dx = toWorld * worldUBO.cameraProjMatInv[0].xyz * pixelScale.x;
+    vec3 dy = toWorld * worldUBO.cameraProjMatInv[1].xyz * pixelScale.y;
+    return vec3(dot(normal, dx), dot(normal, dy), dot(normal, ray));
+}
+
+bool loadNrdDiffuseReconstructionSample(ivec2 sampleTilePixel,
+                                        vec3 centerPlane, ivec2 offset,
+                                        vec3 centerNormal,
+                                        float centerDepth,
+                                        bool centerTransparent,
+                                        vec4 centerMaterial,
+                                        out vec3 value) {
+    int sampleIndex = sampleTilePixel.y * NRD_DIFFUSE_RECONSTRUCTION_TILE_WIDTH + sampleTilePixel.x / 2;
+    vec4 sampleNormalDepth = nrdDiffuseReconstructionNormalDepth[sampleIndex];
+    vec4 sampleIrradiance = nrdDiffuseReconstructionIrradiance[sampleIndex];
+    if (sampleNormalDepth.w == 0.0 || sampleIrradiance.w <= 0.0 || (sampleNormalDepth.w < 0.0) != centerTransparent ||
+        dot(centerNormal, sampleNormalDepth.xyz) < NRD_DIFFUSE_RECONSTRUCTION_NORMAL_THRESHOLD) {
+        return false;
+    }
+
+    vec4 sampleMaterial = nrdDiffuseReconstructionMaterial[sampleIndex];
+    if (centerTransparent &&
+        (abs(sampleMaterial.a - centerMaterial.a) > 0.08 || distance(sampleMaterial.rgb, centerMaterial.rgb) > 0.20)) {
+        return false;
+    }
+
+    float sampleDepth = abs(sampleNormalDepth.w);
+    float depthTolerance = max(NRD_DIFFUSE_RECONSTRUCTION_MIN_DEPTH_TOLERANCE,
+                               min(centerDepth, sampleDepth) * NRD_DIFFUSE_RECONSTRUCTION_DEPTH_SCALE);
+    float sampleProjection = centerPlane.z + dot(centerPlane.xy, vec2(offset));
+    if (centerPlane.z * sampleProjection <= 1e-12 ||
+        abs(centerDepth * centerPlane.z - sampleDepth * sampleProjection) >
+            depthTolerance * max(abs(centerPlane.z), abs(sampleProjection))) return false;
+
+    value = sampleIrradiance.rgb;
+    return isFiniteNrd(value);
+}
+
+bool reconstructNrdDiffuseIrradiance(ivec2 pixel, out vec3 irradiance) {
+    irradiance = vec3(0.0);
+    ivec2 tilePixel = pixel - nrdDiffuseReconstructionTileOrigin();
+    if (any(lessThan(tilePixel, ivec2(NRD_DIFFUSE_RECONSTRUCTION_RADIUS))) ||
+        tilePixel.x + NRD_DIFFUSE_RECONSTRUCTION_RADIUS >= NRD_DIFFUSE_RECONSTRUCTION_SOURCE_TILE_WIDTH ||
+        tilePixel.y + NRD_DIFFUSE_RECONSTRUCTION_RADIUS >= NRD_DIFFUSE_RECONSTRUCTION_TILE_HEIGHT) {
+        return false;
+    }
+
+    int centerIndex = tilePixel.y * NRD_DIFFUSE_RECONSTRUCTION_TILE_WIDTH + tilePixel.x / 2;
+    vec4 centerNormalDepth = nrdDiffuseReconstructionNormalDepth[centerIndex];
+    if (centerNormalDepth.w == 0.0) { return false; }
+    vec3 centerNormal = centerNormalDepth.xyz;
+    float centerDepth = abs(centerNormalDepth.w);
+    bool centerTransparent = centerNormalDepth.w < 0.0;
+    vec4 centerMaterial = nrdDiffuseReconstructionMaterial[centerIndex];
+    vec3 centerPlane = nrdDiffuseSurfacePlane(pixel, centerNormal);
+
+    vec3 radianceSum = vec3(0.0), brightestRadiance = vec3(0.0);
+    float luminanceSum = 0.0;
+    float luminanceSquaredSum = 0.0;
+    float largestLuminance = 0.0;
+    float secondLargestLuminance = 0.0;
+    int sampleCount = 0;
+    for (int sampleY = -NRD_DIFFUSE_RECONSTRUCTION_RADIUS; sampleY <= NRD_DIFFUSE_RECONSTRUCTION_RADIUS; ++sampleY) {
+        for (int sampleX = -NRD_DIFFUSE_RECONSTRUCTION_RADIUS; sampleX <= NRD_DIFFUSE_RECONSTRUCTION_RADIUS; ++sampleX) {
+            if (((sampleX + sampleY) & 1) != 0) continue;
+            vec3 value;
+            if (!loadNrdDiffuseReconstructionSample(tilePixel + ivec2(sampleX, sampleY), centerPlane,
+                                                    ivec2(sampleX, sampleY), centerNormal, centerDepth,
+                                                    centerTransparent, centerMaterial, value)) continue;
+            float luminance = nrdRadianceLuminance(value);
+            radianceSum += value;
+            if (luminance >= largestLuminance) brightestRadiance = value;
+            luminanceSum += luminance;
+            luminanceSquaredSum += luminance * luminance;
+            secondLargestLuminance = max(secondLargestLuminance, min(largestLuminance, luminance));
+            largestLuminance = max(largestLuminance, luminance);
+            ++sampleCount;
+        }
+    }
+    if (sampleCount < NRD_DIFFUSE_RECONSTRUCTION_MIN_SAMPLES) return false;
+
+    float reciprocalCount = 1.0 / float(sampleCount - 1);
+    float mean = max((luminanceSum - largestLuminance) * reciprocalCount, 0.0);
+    float secondMoment = max((luminanceSquaredSum - largestLuminance * largestLuminance) * reciprocalCount, 0.0);
+    float sigma = sqrt(max(secondMoment - mean * mean, 0.0));
+    float luminanceCap = max(secondLargestLuminance * 2.0, mean + 3.0 * sigma) + 0.001;
+    vec3 sum = radianceSum - brightestRadiance *
+        (1.0 - min(1.0, luminanceCap / max(largestLuminance, 1e-6)));
+    irradiance = clamp(sum / float(sampleCount), vec3(0.0), vec3(NRD_FP16_MAX));
+    return isFiniteNrd(irradiance);
+}
+
+vec3 unpackShDirection(vec4 packedDirection) {
+    vec3 direction = packedDirection.xyz;
+    float directionLengthSquared = dot(direction, direction);
+    if (packedDirection.w <= 0.0 || any(isnan(direction)) || any(isinf(direction)) || directionLengthSquared <= 1e-8 ||
+        isnan(directionLengthSquared) || isinf(directionLengthSquared)) {
+        return vec3(0.0);
+    }
+    return clamp(direction, vec3(-1.0), vec3(1.0));
+}
+
+void clearNrdIndirectSignal(ivec2 pixel, bool clearDiffuse, bool clearSpecular) {
+    if (NRD_SH_ENABLED != 0u) {
+        if (clearDiffuse) {
+            imageStore(nrdIndirectDiffuseSh0Image, pixel, vec4(0.0));
+            imageStore(nrdIndirectDiffuseSh1Image, pixel, vec4(0.0));
+        }
+        if (clearSpecular) {
+            imageStore(nrdIndirectSpecularSh0Image, pixel, vec4(0.0));
+            imageStore(nrdIndirectSpecularSh1Image, pixel, vec4(0.0));
+        }
+    } else {
+        if (clearDiffuse) { imageStore(nrdIndirectDiffuseRadianceImage, pixel, vec4(0.0)); }
+        if (clearSpecular) { imageStore(nrdIndirectSpecularRadianceImage, pixel, vec4(0.0)); }
+    }
+}
+
+void clearNrdDirectSignal(ivec2 pixel) {
+    imageStore(nrdDirectDiffuseRadianceImage, pixel, vec4(0.0));
+    imageStore(nrdDirectSpecularRadianceImage, pixel, vec4(0.0));
+    imageStore(nrdDirectDisocclusionThresholdMixImage, pixel, vec4(0.0));
+    if (NRD_MODE != 2u) imageStore(nrdDirectConfidenceImage, pixel, vec4(1.0));
+    imageStore(nrdDirectMotionVectorImage, pixel, vec4(0.0));
+    imageStore(nrdDirectNormalRoughnessImage, pixel,
+               NRD_FrontEnd_PackNormalAndRoughness(vec3(0.0, 1.0, 0.0), 1.0, 0.0));
+    imageStore(nrdDirectLinearDepthImage, pixel, vec4(NRD_INF_DEPTH, 0.0, 0.0, 0.0));
+}
+
+bool nrdNeedsDenoising(ivec2 pixel, out float linearDepth) {
+    linearDepth = imageLoad(indirectGuideDepthImage, pixel).r;
+    bool depthValid = isFiniteNrd(linearDepth) && linearDepth > 0.0 && linearDepth < NRD_INF_DEPTH * 0.9;
+    return imageLoad(composeClearRadianceImage, pixel).a == 0.0 && depthValid;
+}
+
+bool nrdPreviousDepthValid(float previousDepth) {
+    return isFiniteNrd(previousDepth) && previousDepth > 0.0 && previousDepth < NRD_INF_DEPTH * 0.9;
+}
+
+float nrdIndirectHistoryConfidence(bool hasPreviousDepth) {
+    return hasPreviousDepth ? 1.0 : 0.0;
+}
+
+
+NrdDirectGuide loadNrdDirectGuide(ivec2 pixel) {
+    vec4 normalRoughness = imageLoad(directLightGuideNormalRoughnessImage, pixel);
+    vec4 motionDepth = imageLoad(directLightGuideMotionDepthImage, pixel);
+    float normalLengthSquared = dot(normalRoughness.xyz, normalRoughness.xyz);
+    NrdDirectGuide guide;
+    guide.normal =
+        normalLengthSquared > 1e-8 ? normalRoughness.xyz * inversesqrt(normalLengthSquared) : vec3(0.0, 1.0, 0.0);
+    guide.terminal = normalRoughness.w > 1.5;
+    guide.roughness = clamp(normalRoughness.w - (guide.terminal ? 2.0 : 0.0), 0.0, 1.0);
+    guide.motion = motionDepth.xy;
+    guide.depth = motionDepth.z;
+    guide.previousDepth = motionDepth.w;
+    guide.valid = isFiniteNrd(normalRoughness) && isFiniteNrd(motionDepth) && guide.depth > 0.0 &&
+                  guide.depth < NRD_INF_DEPTH * 0.9 && nrdPreviousDepthValid(guide.previousDepth) &&
+                  normalLengthSquared > 1e-8;
+    return guide;
+}
+
+bool nrdEnvironmentSignal(ivec2 pixel, float hitDistance) {
+    if (imageLoad(indirectGuideNormalRoughnessImage, pixel).w < 0.12) {
+        float previousDepth = imageLoad(composeBaseEmissionImage, pixel).a;
+        return isFiniteNrd(previousDepth) && previousDepth < 0.0;
+    }
+    return isFiniteNrd(hitDistance) && hitDistance > 900.0;
+}
+
+NrdDirectGuide loadNrdTransmissionGuide(ivec2 pixel) {
+    NrdDirectGuide guide = NrdDirectGuide(vec3(0, 1, 0), 0, vec2(0), 0, 0, false, false);
+    vec4 diffuse = imageLoad(indirectDiffuseRadianceImage, pixel);
+    float hitDistance = imageLoad(indirectDiffuseHitDistanceImage, pixel).r;
+    if (diffuse.a > 0.0 && isFiniteNrd(diffuse) && isFiniteNrd(hitDistance) &&
+        !nrdEnvironmentSignal(pixel, hitDistance)) {
+        guide = loadNrdDirectGuide(pixel);
+        if (guide.valid && guide.terminal) return guide;
+        guide.valid = false;
+    }
+    ivec2 pairedPixel = ivec2(pixel.x ^ 1, pixel.y);
+    if (pairedPixel.x >= imageSize(indirectGuideDepthImage).x) return guide;
+    vec4 normal = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    vec4 pairedNormal = imageLoad(indirectGuideNormalRoughnessImage, pairedPixel);
+    float depth = imageLoad(indirectGuideDepthImage, pixel).r;
+    float pairedDepth = imageLoad(indirectGuideDepthImage, pairedPixel).r;
+    if (imageLoad(sharedSpecularAlbedoImage, pairedPixel).a <= 0.5 || pairedNormal.w >= 0.12 ||
+        dot(normalizeNrdSafe(normal.xyz, vec3(0.0)), normalizeNrdSafe(pairedNormal.xyz, vec3(0.0))) < 0.995 ||
+        abs(depth - pairedDepth) > max(0.05, min(depth, pairedDepth) * 0.10))
+        return guide;
+    diffuse = imageLoad(indirectDiffuseRadianceImage, pairedPixel);
+    hitDistance = imageLoad(indirectDiffuseHitDistanceImage, pairedPixel).r;
+    if (diffuse.a > 0.0 && isFiniteNrd(diffuse) && isFiniteNrd(hitDistance) &&
+        !nrdEnvironmentSignal(pairedPixel, hitDistance)) {
+        NrdDirectGuide paired = loadNrdDirectGuide(pairedPixel);
+        if (paired.valid && paired.terminal) return paired;
+    }
+    return guide;
+}
+
+bool sampleNrdTransparentDepth(vec2 position, ivec2 size, vec3 referenceNormal, out float depth) {
+    vec2 clampedPosition = clamp(position, vec2(0.0), vec2(size - 1));
+    ivec2 base = ivec2(floor(clampedPosition));
+    ivec2 next = min(base + ivec2(1), size - 1);
+    ivec2 samplePixels[4] = ivec2[4](base, ivec2(next.x, base.y), ivec2(base.x, next.y), next);
+    vec2 fraction = clampedPosition - vec2(base);
+    float sampleWeights[4] = float[4]((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y),
+                                      (1.0 - fraction.x) * fraction.y, fraction.x * fraction.y);
+    float validWeight = 0.0;
+    depth = 0.0;
+    for (int index = 0; index < 4; ++index) {
+        ivec2 samplePixel = samplePixels[index];
+        float sampleDepth = imageLoad(indirectGuideDepthImage, samplePixel).r;
+        vec4 sampleNormalRoughness = imageLoad(indirectGuideNormalRoughnessImage, samplePixel);
+        vec3 sampleNormal = normalizeNrdSafe(sampleNormalRoughness.xyz, referenceNormal);
+        bool sampleTransparent = imageLoad(sharedSpecularAlbedoImage, samplePixel).a > 0.5;
+        bool valid = sampleTransparent && isFiniteNrd(sampleDepth) && sampleDepth > 0.0 &&
+                     sampleDepth < NRD_INF_DEPTH * 0.9 && dot(sampleNormal, referenceNormal) >= 0.95;
+        if (!valid) { continue; }
+        depth += sampleDepth * sampleWeights[index];
+        validWeight += sampleWeights[index];
+    }
+    depth /= max(validWeight, 1e-6);
+    return validWeight > 1e-4;
+}
+
+ivec2 nrdCheckerSourcePixel(ivec2 packedPixel, ivec2 size, uint checkerboard) {
+    int packedWidth = (size.x + 1) / 2;
+    if (packedPixel.x >= packedWidth) { return ivec2(-1); }
+    uint parity = checkerboard ^ (uint(packedPixel.y) & 1u) ^ (nrdMode.frameIndex & 1u);
+    ivec2 sourcePixel = ivec2(packedPixel.x * 2 + int(parity), packedPixel.y);
+    return sourcePixel.x < size.x ? sourcePixel : ivec2(-1);
+}
+
+bool nrdHalfRatePhysicalSample(ivec2 pixel) {
+    if (pixel.x < 0 || pixel.y < 0) { return false; }
+    uint expectedParity = (uint(pixel.y) & 1u) ^ (nrdMode.frameIndex & 1u);
+    return (uint(pixel.x) & 1u) == expectedParity;
+}
+
+bool loadNrdSplitPair(ivec2 pixel,
+                            ivec2 size,
+                            bool specularSignal,
+                            vec3 normal,
+                            float depth,
+                            vec4 inputRadiance,
+                            float hitDistance,
+                            out ivec2 pairedPixel,
+                            out vec4 pairedRadiance,
+                            out float pairedHitDistance) {
+    pairedPixel = ivec2(pixel.x ^ 1, pixel.y);
+    pairedRadiance = vec4(0.0);
+    pairedHitDistance = 0.0;
+    if (pairedPixel.x >= size.x) return false;
+    vec4 material = imageLoad(sharedSpecularAlbedoImage, pairedPixel);
+    vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pairedPixel);
+    float pairedDepth = imageLoad(indirectGuideDepthImage, pairedPixel).r;
+    if (material.a <= 0.5 || !isFiniteNrd(normalRoughness) || normalRoughness.w < 0.0 || normalRoughness.w >= 0.12 ||
+        dot(normalRoughness.xyz, normalRoughness.xyz) <= 1e-8 ||
+        dot(normal, normalizeNrdSafe(normalRoughness.xyz, normal)) <= 0.995 || !isFiniteNrd(pairedDepth) ||
+        pairedDepth <= 0.0 || abs(pairedDepth - depth) >= max(0.05, min(pairedDepth, depth) * 0.10))
+        return false;
+    pairedRadiance = specularSignal ? imageLoad(indirectSpecularRadianceImage, pairedPixel) :
+                                      imageLoad(indirectDiffuseRadianceImage, pairedPixel);
+    pairedHitDistance = specularSignal ? imageLoad(indirectSpecularHitDistanceImage, pairedPixel).r :
+                                         imageLoad(indirectDiffuseHitDistanceImage, pairedPixel).r;
+    return (inputRadiance.a > 0.0 && isFiniteNrd(inputRadiance)) ||
+           (pairedRadiance.a > 0.0 && isFiniteNrd(pairedRadiance));
+}
+
+bool loadNrdEnvironmentPair(ivec2 pixel, ivec2 size, bool specularSignal, vec3 normal, float depth,
+                            vec4 inputRadiance, float hitDistance, out ivec2 pairedPixel,
+                            out vec4 pairedRadiance, out float pairedHitDistance) {
+    pairedPixel = ivec2(pixel.x ^ 1, pixel.y);
+    pairedRadiance = vec4(0.0);
+    pairedHitDistance = 0.0;
+    if (pairedPixel.x >= size.x) return false;
+    pairedHitDistance = specularSignal ? imageLoad(indirectSpecularHitDistanceImage, pairedPixel).r :
+                                        imageLoad(indirectDiffuseHitDistanceImage, pairedPixel).r;
+    if (!nrdEnvironmentSignal(pixel, hitDistance) &&
+        !nrdEnvironmentSignal(pairedPixel, pairedHitDistance)) return false;
+    if (!loadNrdSplitPair(pixel, size, specularSignal, normal, depth, inputRadiance, hitDistance,
+                          pairedPixel, pairedRadiance, pairedHitDistance)) return false;
+    return (inputRadiance.a > 0.0 && isFiniteNrd(inputRadiance) && nrdEnvironmentSignal(pixel, hitDistance)) ||
+           (pairedRadiance.a > 0.0 && isFiniteNrd(pairedRadiance) && nrdEnvironmentSignal(pairedPixel, pairedHitDistance));
+}
+
+bool reconstructNrdSplitPair(ivec2 pixel,
+                                   ivec2 size,
+                                   bool specularSignal,
+                                   vec3 normal,
+                                   float depth,
+                                   inout vec4 inputRadiance,
+                                   inout float hitDistance,
+                                   inout vec3 direction) {
+    ivec2 pairedPixel;
+    vec4 pairedInput;
+    float pairedHitDistance;
+    if (!loadNrdSplitPair(pixel, size, specularSignal, normal, depth, inputRadiance, hitDistance, pairedPixel,
+                                pairedInput, pairedHitDistance)) {
+        return false;
+    }
+    bool validCurrent = inputRadiance.a > 0.0 && isFiniteNrd(inputRadiance);
+    bool validPaired = pairedInput.a > 0.0 && isFiniteNrd(pairedInput);
+
+    vec3 currentColor = validCurrent ? sanitizeNrdRadiance(inputRadiance.rgb) : vec3(0.0);
+    vec3 pairedColor = validPaired ? sanitizeNrdRadiance(pairedInput.rgb) : vec3(0.0);
+    if (NRD_SH_ENABLED != 0u) {
+        vec4 packedDirection = specularSignal ? imageLoad(indirectSpecularDirectionImage, pairedPixel) :
+                                                imageLoad(indirectDiffuseDirectionImage, pairedPixel);
+        vec3 pairedDirection = unpackShDirection(packedDirection);
+        direction = normalizeNrdSafe(direction * nrdRadianceLuminance(currentColor) +
+                                         pairedDirection * nrdRadianceLuminance(pairedColor),
+                                     vec3(0.0));
+    }
+    bool finiteDiffuse = !specularSignal &&
+        !(validCurrent && nrdEnvironmentSignal(pixel, hitDistance)) &&
+        !(validPaired && nrdEnvironmentSignal(pairedPixel, pairedHitDistance));
+    if (finiteDiffuse) {
+        currentColor /= max(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.05));
+        pairedColor /= max(imageLoad(sharedDiffuseAlbedoMetallicImage, pairedPixel).rgb, vec3(0.05));
+    }
+    vec3 radiance = (currentColor + pairedColor) * 0.5;
+    if (finiteDiffuse) radiance *= max(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.05));
+    inputRadiance = vec4(radiance, 1.0);
+    hitDistance = max(validCurrent && isFiniteNrd(hitDistance) ? hitDistance : 0.0,
+                      validPaired && isFiniteNrd(pairedHitDistance) ? pairedHitDistance : 0.0);
+    return true;
+}
+
+void prepareNrdCheckerDiffuse(ivec2 outputPixel, ivec2 pixel, ivec2 size) {
+    if (pixel.x < 0) {
+        clearNrdIndirectSignal(outputPixel, true, false);
+        return;
+    }
+    float linearDepth = NRD_INF_DEPTH;
+    if (!nrdNeedsDenoising(pixel, linearDepth)) {
+        clearNrdIndirectSignal(outputPixel, true, false);
         return;
     }
 
-    vec2 nrdMV = imageLoad(motionVectorImage, pixel).xy;
-    nrdMV += worldUBO.cameraJitter;
-    if (any(isnan(nrdMV)) || any(isinf(nrdMV))) nrdMV = vec2(0.0);
-    imageStore(nrdMotionVectorImage, pixel, vec4(nrdMV, 0.0, 0.0));
+    float hitDistanceDepth = linearDepth;
 
-    vec4 normalRoughness = imageLoad(normalRoughnessImage, pixel);
-    vec3 normal = normalize(normalRoughness.xyz + vec3(0.0, 1e-6, 0.0));
-    float roughness = normalRoughness.w;
-    float specHitDist = imageLoad(specularHitDepthImage, pixel).r;
+    vec4 diffuseInput = imageLoad(indirectDiffuseRadianceImage, pixel);
+    vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    bool smoothTransmission =
+        NRD_MODE == 2u && normalRoughness.w < 0.12 && imageLoad(sharedSpecularAlbedoImage, pixel).a > 0.5;
+    float sourceHitDistance = imageLoad(indirectDiffuseHitDistanceImage, pixel).r;
+    vec3 sourceDirection = vec3(0.0);
+    if (NRD_SH_ENABLED != 0u) sourceDirection = unpackShDirection(imageLoad(indirectDiffuseDirectionImage, pixel));
+    bool pairedSignal = false;
+    if (smoothTransmission) {
+        vec3 normal = normalizeNrdSafe(normalRoughness.xyz, vec3(0.0, 1.0, 0.0));
+        pairedSignal = reconstructNrdSplitPair(pixel, size, false, normal, linearDepth, diffuseInput,
+                                                          sourceHitDistance, sourceDirection);
+    }
+    bool hasSample = diffuseInput.a > 0.0 && isFiniteNrd(diffuseInput);
+    vec3 radiance = hasSample ? sanitizeNrdRadiance(diffuseInput.rgb) : vec3(0.0);
+    float hitDistance = hasSample ? NRD_FrontEnd_TrimHitDistance(sourceHitDistance, 1e-3) : 0.0;
+    float normalizedHitDistance =
+        REBLUR_FrontEnd_GetNormHitDist(hitDistance, max(hitDistanceDepth, 0.0), REBLUR_HIT_DISTANCE_PARAMETERS, 1.0);
+    bool transmissionAlbedo = false;
+    NrdDirectGuide transmissionGuide = NrdDirectGuide(vec3(0), 0, vec2(0), 0, 0, false, false);
+    if (smoothTransmission) {
+        transmissionGuide = loadNrdTransmissionGuide(pixel);
+        transmissionAlbedo = transmissionGuide.valid;
+        if (transmissionAlbedo)
+            normalizedHitDistance = REBLUR_FrontEnd_GetNormHitDist(hitDistance, transmissionGuide.depth,
+                                                                   REBLUR_HIT_DISTANCE_PARAMETERS, 1.0);
+    }
+    vec3 albedo = smoothTransmission && !transmissionAlbedo ?
+                      vec3(1.0) :
+                      max(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.05));
+    vec3 demodulated = safeDiv(radiance, albedo);
+    vec3 reconstructedIrradiance;
+    if (NRD_MODE != 0u && (!pairedSignal || transmissionAlbedo) && reconstructNrdDiffuseIrradiance(pixel, reconstructedIrradiance)) {
+        demodulated = reconstructedIrradiance;
+    }
+    if (transmissionAlbedo && hasSample) {
+        demodulated = suppressIsolatedGlossyFirefly(pixel, demodulated,
+            normalizeNrdSafe(normalRoughness.xyz, vec3(0, 1, 0)), normalRoughness.w,
+            linearDepth, NRD_FIREFLY_TRANSMISSION_DIFFUSE, true, transmissionGuide);
+    }
 
-    imageStore(nrdLinearDepthImage, pixel, vec4(linearDepth, 0.0, 0.0, 0.0));
-    imageStore(nrdNormalRoughnessImage, pixel, NRD_FrontEnd_PackNormalAndRoughness(normal, roughness, 0.0));
+    if (NRD_SH_ENABLED != 0u) {
+        vec4 sh1;
+        imageStore(nrdIndirectDiffuseSh0Image, outputPixel,
+                   REBLUR_FrontEnd_PackSh(demodulated, normalizedHitDistance, sourceDirection, sh1, true));
+        imageStore(nrdIndirectDiffuseSh1Image, outputPixel, sh1);
+    } else {
+        imageStore(nrdIndirectDiffuseRadianceImage, outputPixel,
+                   REBLUR_FrontEnd_PackRadianceAndNormHitDist(demodulated, normalizedHitDistance, true));
+    }
+}
 
-    vec4 refractionData = imageLoad(refractionRadianceImage, pixel);
-    vec3 refractionRadiance = refractionData.a > 0.5 ? max(refractionData.rgb, vec3(0.0)) : vec3(0.0);
-    vec3 diffRadiance = imageLoad(diffuseIndirectRadianceImage, pixel).rgb + imageLoad(directRadianceImage, pixel).rgb;
-    float diffHitDist = max(imageLoad(diffuseHitDepthImage, pixel).r, 0.001);
-    vec3 diffAlbedo = max(imageLoad(diffuseAlbedoMetallicImage, pixel).rgb, vec3(0.05));
-    vec3 demodDiffuse = safeDiv(diffRadiance, diffAlbedo);
-    float normDiffHitDist = REBLUR_FrontEnd_GetNormHitDist(diffHitDist, linearDepth, gDiffHitDistParams, 1.0);
-    imageStore(nrdDiffuseRadianceImage, pixel,
-               REBLUR_FrontEnd_PackRadianceAndNormHitDist(demodDiffuse, normDiffHitDist, true));
+void prepareNrdCheckerSpecular(ivec2 outputPixel, ivec2 pixel, ivec2 size) {
+    if (pixel.x < 0) {
+        clearNrdIndirectSignal(outputPixel, false, true);
+        return;
+    }
+    float linearDepth = NRD_INF_DEPTH;
+    if (!nrdNeedsDenoising(pixel, linearDepth)) {
+        clearNrdIndirectSignal(outputPixel, false, true);
+        return;
+    }
 
-    vec3 specRadiance = imageLoad(specularIndirectRadianceImage, pixel).rgb + refractionRadiance;
-    specHitDist = NRD_FrontEnd_TrimHitDistance(specHitDist, 1e-3);
-    vec3 specAlbedo = max(imageLoad(specularAlbedoImage, pixel).rgb, vec3(0.04));
-    vec3 demodSpecular = safeDiv(specRadiance, specAlbedo);
-    float normSpecHitDist = REBLUR_FrontEnd_GetNormHitDist(specHitDist, linearDepth, gSpecHitDistParams, roughness);
-    imageStore(nrdSpecularRadianceImage, pixel,
-               REBLUR_FrontEnd_PackRadianceAndNormHitDist(demodSpecular, normSpecHitDist, true));
+    vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    vec3 normal = normalizeNrdSafe(normalRoughness.xyz, vec3(0.0, 1.0, 0.0));
+    float roughness = clamp(normalRoughness.w, 0.0, 1.0);
+    vec4 material = imageLoad(sharedSpecularAlbedoImage, pixel);
+    bool transparent = material.a > 0.5;
+    float hitDistanceDepth = linearDepth;
+    vec4 specularInput = imageLoad(indirectSpecularRadianceImage, pixel);
+    float sourceHitDistance = imageLoad(indirectSpecularHitDistanceImage, pixel).r;
+    vec3 sourceDirection = vec3(0.0);
+    if (NRD_SH_ENABLED != 0u) sourceDirection = unpackShDirection(imageLoad(indirectSpecularDirectionImage, pixel));
+    if (NRD_MODE == 2u && transparent && roughness < 0.12) {
+        reconstructNrdSplitPair(pixel, size, true, normal, linearDepth, specularInput, sourceHitDistance,
+                                      sourceDirection);
+    }
+    bool hasSample = specularInput.a > 0.0 && isFiniteNrd(specularInput);
+    vec3 radiance = hasSample ? sanitizeNrdRadiance(specularInput.rgb) : vec3(0.0);
+    vec3 materialFactor = nrdSpecularMaterialFactor(pixel, size, normal, roughness, material, transparent);
+    vec3 demodulated = safeDiv(radiance, materialFactor);
+    if (hasSample) {
+        demodulated =
+            suppressIsolatedGlossyFirefly(pixel, demodulated, normal, roughness, linearDepth, NRD_FIREFLY_INDIRECT_SPECULAR, transparent,
+                NrdDirectGuide(vec3(0), 0, vec2(0), 0, 0, false, false));
+    }
+    float hitDistance = hasSample ? NRD_FrontEnd_TrimHitDistance(sourceHitDistance, 1e-3) : 0.0;
+    float normalizedHitDistance = REBLUR_FrontEnd_GetNormHitDist(hitDistance, max(hitDistanceDepth, 0.0),
+                                                                 REBLUR_HIT_DISTANCE_PARAMETERS, roughness);
+
+    if (NRD_SH_ENABLED != 0u) {
+        vec4 sh1;
+        imageStore(nrdIndirectSpecularSh0Image, outputPixel,
+                   REBLUR_FrontEnd_PackSh(demodulated, normalizedHitDistance, sourceDirection, sh1, true));
+        imageStore(nrdIndirectSpecularSh1Image, outputPixel, sh1);
+    } else {
+        imageStore(nrdIndirectSpecularRadianceImage, outputPixel,
+                   REBLUR_FrontEnd_PackRadianceAndNormHitDist(demodulated, normalizedHitDistance, true));
+    }
+}
+
+void prepareNrdIndirectSignal(ivec2 outputPixel, ivec2 diffusePixel, ivec2 specularPixel, ivec2 size) {
+    prepareNrdCheckerDiffuse(outputPixel, diffusePixel, size);
+    prepareNrdCheckerSpecular(outputPixel, specularPixel, size);
+}
+
+void prepareNrdIndirectGuide(ivec2 outputPixel, ivec2 pixel, ivec2 size) {
+    float linearDepth;
+    bool needDenoise = nrdNeedsDenoising(pixel, linearDepth);
+    if (!needDenoise) {
+        float safeLinearDepth = NRD_INF_DEPTH;
+        imageStore(nrdIndirectConfidenceImage, outputPixel, vec4(0.0));
+        imageStore(nrdIndirectDisocclusionThresholdMixImage, outputPixel, vec4(0.0));
+        imageStore(nrdIndirectMotionVectorImage, outputPixel, vec4(0.0));
+        imageStore(nrdIndirectNormalRoughnessImage, outputPixel,
+                   NRD_FrontEnd_PackNormalAndRoughness(vec3(0.0, 1.0, 0.0), 1.0, 0.0));
+        imageStore(nrdIndirectLinearDepthImage, outputPixel, vec4(safeLinearDepth, 0.0, 0.0, 0.0));
+        imageStore(nrdIndirectBaseColorMetalnessImage, outputPixel, vec4(0.0));
+        if (NRD_MODE == 2u) {
+            imageStore(nrdDiffuseMotionVectorImage, outputPixel, vec4(0.0));
+            imageStore(nrdDiffuseNormalRoughnessImage, outputPixel,
+                       NRD_FrontEnd_PackNormalAndRoughness(vec3(0.0, 1.0, 0.0), 1.0, 0.0));
+            imageStore(nrdDiffuseDepthImage, outputPixel, vec4(safeLinearDepth));
+        }
+        return;
+    }
+
+    vec2 interfaceMotion = imageLoad(indirectGuideMotionImage, pixel).xy;
+    if (!isFiniteNrd(vec3(interfaceMotion, 0.0))) { interfaceMotion = vec2(0.0); }
+    float encodedPreviousDepth = imageLoad(composeBaseEmissionImage, pixel).a;
+    bool usesEnvironmentMotion = isFiniteNrd(encodedPreviousDepth) && encodedPreviousDepth < 0.0;
+    float interfacePreviousDepth = abs(encodedPreviousDepth);
+    bool hasInterfacePreviousDepth = nrdPreviousDepthValid(interfacePreviousDepth);
+
+    vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    vec3 normal = normalizeNrdSafe(normalRoughness.xyz, vec3(0.0, 1.0, 0.0));
+    float roughness = clamp(normalRoughness.w, 0.0, 1.0);
+    vec4 specularMaterial = imageLoad(sharedSpecularAlbedoImage, pixel);
+    bool transparentMaterial = specularMaterial.a > 0.5;
+    NrdDirectGuide terminalGuide = NrdDirectGuide(vec3(0, 1, 0), 0.0, vec2(0), 0.0, 0.0, false, false);
+    if (transparentMaterial && !(NRD_MODE == 2u && roughness < 0.12))
+        terminalGuide = loadNrdDirectGuide(pixel);
+    bool terminalGuideCandidate =
+        transparentMaterial && terminalGuide.valid && terminalGuide.terminal && !usesEnvironmentMotion;
+    float terminalTargetDepth = linearDepth;
+    bool terminalTargetDepthValid =
+        terminalGuideCandidate &&
+        sampleNrdTransparentDepth(vec2(pixel) + terminalGuide.motion, size, normal, terminalTargetDepth);
+    bool useTerminalGuide = terminalGuideCandidate && terminalTargetDepthValid;
+    vec3 nrdNormal = normal;
+    bool useSpecularTerminalGuide = useTerminalGuide && NRD_MODE != 2u;
+    vec2 nrdMotion = useSpecularTerminalGuide ? terminalGuide.motion : interfaceMotion;
+    float nrdDepth = linearDepth;
+    float nrdPreviousDepth = interfacePreviousDepth;
+    if (useSpecularTerminalGuide) nrdPreviousDepth += terminalTargetDepth - linearDepth;
+    bool hasNrdPreviousDepth = nrdPreviousDepthValid(nrdPreviousDepth);
+    float motionDepth = hasNrdPreviousDepth && (!usesEnvironmentMotion || NRD_MODE == 2u) ? nrdPreviousDepth - nrdDepth : 0.0;
+    bool halfRateEnvironmentGuide = false;
+    bool pairedEnvironmentGuide = false;
+    if (NRD_MODE == 2u && transparentMaterial) {
+        float diffuseDistance = imageLoad(indirectDiffuseHitDistanceImage, pixel).r;
+        float specularDistance = imageLoad(indirectSpecularHitDistanceImage, pixel).r;
+        bool diffuseEnvironment = nrdEnvironmentSignal(pixel, diffuseDistance);
+        bool specularEnvironment = nrdEnvironmentSignal(pixel, specularDistance);
+        if (roughness < 0.12) {
+            ivec2 pairedPixel;
+            vec4 pairedRadiance;
+            float pairedHitDistance;
+            pairedEnvironmentGuide = loadNrdEnvironmentPair(
+                pixel, size, true, normal, linearDepth, imageLoad(indirectSpecularRadianceImage, pixel),
+                specularDistance, pairedPixel, pairedRadiance, pairedHitDistance);
+            specularEnvironment = specularEnvironment || pairedEnvironmentGuide;
+            bool pairedDiffuseEnvironment = loadNrdEnvironmentPair(
+                pixel, size, false, normal, linearDepth, imageLoad(indirectDiffuseRadianceImage, pixel),
+                diffuseDistance, pairedPixel, pairedRadiance, pairedHitDistance);
+            diffuseEnvironment = diffuseEnvironment || pairedDiffuseEnvironment;
+            pairedEnvironmentGuide = pairedEnvironmentGuide || pairedDiffuseEnvironment;
+        }
+        if ((diffuseEnvironment || specularEnvironment) && roughness < 0.12) {
+            vec3 ray = -reconstructNrdWorldViewDirection(pixel, size);
+            vec4 previousClip =
+                previousWorldUBO.cameraProjMat * (previousWorldUBO.cameraEffectedViewMat * vec4(ray, 0.0));
+            if (isFiniteNrd(previousClip) && previousClip.w > 1e-8) {
+                vec2 previousPixel = (previousClip.xy / previousClip.w * 0.5 + 0.5) * vec2(size);
+                vec2 environmentMotion = previousPixel - (vec2(pixel) + 0.5 + worldUBO.cameraJitter);
+                if (isFiniteNrd(vec3(environmentMotion, 0.0))) {
+                    nrdMotion = environmentMotion;
+                    motionDepth = hasInterfacePreviousDepth ? interfacePreviousDepth - nrdDepth : 0.0;
+                    halfRateEnvironmentGuide = true;
+                }
+            }
+        } else if (diffuseEnvironment || specularEnvironment) {
+            vec4 direction = specularEnvironment ? imageLoad(indirectSpecularDirectionImage, pixel) :
+                                                   imageLoad(indirectDiffuseDirectionImage, pixel);
+            float directionLength = length(direction.xyz);
+            if (direction.w > 0.0 && isFiniteNrd(directionLength) && directionLength > 1e-6) {
+                vec3 ray = -direction.xyz / directionLength;
+                vec4 previousClip =
+                    previousWorldUBO.cameraProjMat * (previousWorldUBO.cameraEffectedViewMat * vec4(ray, 0.0));
+                if (isFiniteNrd(previousClip.w) && previousClip.w > 1e-8) {
+                    vec2 previousPixel = (previousClip.xy / previousClip.w * 0.5 + 0.5) * vec2(size);
+                    vec2 environmentMotion = previousPixel - (vec2(pixel) + 0.5 + worldUBO.cameraJitter);
+                    if (isFiniteNrd(vec3(environmentMotion, 0.0))) {
+                        nrdMotion = environmentMotion;
+                        motionDepth = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    float nrdMaterialId = halfRateEnvironmentGuide && pairedEnvironmentGuide ? NRD_HALF_RATE_ENVIRONMENT_MATERIAL :
+                          useTerminalGuide && !halfRateEnvironmentGuide      ? 2.0 :
+                                                                               (transparentMaterial ? 1.0 : 0.0);
+
+    if (NRD_MODE == 2u && transparentMaterial && roughness < 0.12 &&
+        !(halfRateEnvironmentGuide && pairedEnvironmentGuide))
+        nrdMaterialId = 2.0;
+    vec3 diffAlbedo = max(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.05));
+
+    imageStore(nrdIndirectMotionVectorImage, outputPixel, vec4(nrdMotion, motionDepth, 0.0));
+    imageStore(nrdIndirectLinearDepthImage, outputPixel, vec4(nrdDepth, 0.0, 0.0, 0.0));
+    imageStore(nrdIndirectNormalRoughnessImage, outputPixel,
+               NRD_FrontEnd_PackNormalAndRoughness(nrdNormal, roughness,
+                   NRD_MODE == 2u && transparentMaterial && roughness < 0.12 ? 2.0 : nrdMaterialId));
+    if (NRD_MODE == 2u) {
+        vec2 diffuseMotion = nrdMotion;
+        float diffuseMotionDepth = motionDepth;
+        float diffuseMaterialId = nrdMaterialId;
+        vec3 diffuseNormal = nrdNormal;
+        float diffuseDepth = nrdDepth;
+        bool finiteTransmission = false;
+        if (transparentMaterial && roughness < 0.12) {
+            NrdDirectGuide transmissionGuide = loadNrdTransmissionGuide(pixel);
+            finiteTransmission = transmissionGuide.valid;
+            if (finiteTransmission) {
+                diffuseMaterialId = 1.0;
+                diffuseMotion = transmissionGuide.motion;
+                diffuseMotionDepth = transmissionGuide.previousDepth - transmissionGuide.depth;
+                diffuseNormal = transmissionGuide.normal;
+                diffuseDepth = transmissionGuide.depth;
+            }
+        }
+        imageStore(nrdDiffuseMotionVectorImage, outputPixel,
+                   vec4(diffuseMotion, diffuseMotionDepth, finiteTransmission ? 1.0 : 0.0));
+        imageStore(nrdDiffuseNormalRoughnessImage, outputPixel,
+                   NRD_FrontEnd_PackNormalAndRoughness(diffuseNormal, roughness, diffuseMaterialId));
+        imageStore(nrdDiffuseDepthImage, outputPixel, vec4(diffuseDepth));
+    }
+
+    float historyConfidence = nrdIndirectHistoryConfidence(hasNrdPreviousDepth);
+    if (NRD_MODE == 2u) historyConfidence *= 1.0 - nrdSampleLightingResponse(outputPixel, normal);
+    imageStore(nrdIndirectConfidenceImage, outputPixel, vec4(historyConfidence));
+    bool parallaxMaterial = specularMaterial.a > 0.125 && !transparentMaterial;
+    imageStore(nrdIndirectDisocclusionThresholdMixImage, outputPixel,
+               vec4((transparentMaterial || parallaxMaterial) ? 1.0 : 0.0));
+    imageStore(nrdIndirectBaseColorMetalnessImage, outputPixel,
+               vec4(clamp(diffAlbedo, vec3(0.0), vec3(1.0)),
+                    clamp(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).a, 0.0, 1.0)));
+}
+
+shared uint filterDirectTile;
+void stageNrdDirectTile(ivec2 size) {
+    ivec2 origin = ivec2(gl_WorkGroupID.xy) * 16 - 2;
+    if (gl_LocalInvocationIndex == 0) filterDirectTile = 0;
+    barrier();
+    for (uint i = gl_LocalInvocationIndex; i < 400; i += 256) {
+        ivec2 q = clamp(origin + ivec2(i % 20, i / 20), ivec2(0), size - 1);
+        float hit = imageLoad(directHitDistanceImage, q).r;
+        nrdDiffuseReconstructionIrradiance[i].w = hit;
+        if (hit < -1e-6 || imageLoad(nrdDirectConfidenceImage, q).r < .99) atomicOr(filterDirectTile, 1);
+    }
+    barrier();
+    if (filterDirectTile == 0) return;
+    for (uint i = gl_LocalInvocationIndex; i < 400; i += 256) {
+        ivec2 q = origin + ivec2(i % 20, i / 20);
+        ivec2 pixel = clamp(q, ivec2(0), size - 1);
+        vec4 diffuse = imageLoad(directDiffuseRadianceImage, pixel);
+        vec4 specular = imageLoad(directSpecularRadianceImage, pixel);
+        vec4 normal = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+        float depth = imageLoad(indirectGuideDepthImage, pixel).r;
+        bool transparent = imageLoad(sharedSpecularAlbedoImage, pixel).a > .5;
+        NrdDirectGuide receiver = loadNrdDirectGuide(pixel);
+        if (receiver.valid) { normal.xyz = receiver.normal; depth = receiver.depth; }
+        bool valid = all(greaterThanEqual(q, ivec2(0))) && all(lessThan(q, size)) &&
+            (!transparent || receiver.valid) && diffuse.a > 0 &&
+            isFiniteNrd(diffuse) && isFiniteNrd(specular);
+        nrdDiffuseReconstructionNormalDepth[i] = vec4(normalizeNrdSafe(normal.xyz, vec3(0, 1, 0)), valid ? depth : 0);
+        nrdDiffuseReconstructionIrradiance[i] = vec4(safeDiv(sanitizeNrdRadiance(diffuse.rgb),
+            max(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(.05))), imageLoad(directHitDistanceImage, pixel).r);
+        nrdDiffuseReconstructionMaterial[i] = vec4(sanitizeNrdRadiance(specular.rgb), float(transparent));
+    }
+}
+int nrdDirectTileIndex(ivec2 pixel) {
+    ivec2 local = pixel - ivec2(gl_WorkGroupID.xy) * 16 + 2;
+    return local.y * 20 + local.x;
+}
+shared uint skipDirectTile;
+void main() {
+    if (NRD_MODE == 2u && NRD_SEPARATE_DIRECT_ENABLED != 0u) {
+        if (gl_LocalInvocationIndex == 0) {
+            ivec2 tile = ivec2(gl_WorkGroupID.xy) / 2;
+            ivec2 tiles = nrdLightingGridSize();
+            uint empty = 1;
+            for (int y = -1; y <= 1; ++y)
+                for (int x = -1; x <= 1; ++x)
+                    empty &= uint(nrdLightingDirectEmpty(
+                        clamp(tile + ivec2(x, y), ivec2(0), tiles - 1)));
+            skipDirectTile = empty;
+        }
+        barrier();
+    }
+    ivec2 size = imageSize(indirectGuideDepthImage);
+    if (NRD_MODE != 0u) { stageNrdDiffuseReconstructionTile(size); }
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    bool inBounds = pixel.x < size.x && pixel.y < size.y;
+    if (inBounds) {
+
+    prepareNrdIndirectGuide(pixel, pixel, size);
+    int packedWidth = (size.x + 1) / 2;
+    if (NRD_MODE == 0u) {
+        prepareNrdIndirectSignal(pixel, pixel, pixel, size);
+    } else if (pixel.x < packedWidth) {
+        ivec2 diffusePixel = nrdCheckerSourcePixel(pixel, size, 0u);
+        ivec2 specularPixel = NRD_MODE == 2u ? diffusePixel : nrdCheckerSourcePixel(pixel, size, 1u);
+        prepareNrdIndirectSignal(pixel, diffusePixel, specularPixel, size);
+    } else {
+        clearNrdIndirectSignal(pixel, true, true);
+    }
+
+    }
+    if (NRD_MODE == 2u && NRD_SEPARATE_DIRECT_ENABLED != 0u && skipDirectTile == 0) {
+        barrier();
+        stageNrdDirectTile(size);
+        barrier();
+    }
+    if (!inBounds || NRD_SEPARATE_DIRECT_ENABLED == 0u) return;
+
+    ivec2 directPixel = pixel;
+    if (NRD_MODE == 2u && NRD_SEPARATE_DIRECT_ENABLED != 0u &&
+        skipDirectTile != 0) {
+        clearNrdDirectSignal(directPixel);
+        return;
+    }
+    float linearDepth;
+    bool needDenoise = nrdNeedsDenoising(pixel, linearDepth);
+    if (!needDenoise) {
+        if (NRD_SEPARATE_DIRECT_ENABLED != 0u) { clearNrdDirectSignal(directPixel); }
+        return;
+    }
+
+    vec2 interfaceMotion = imageLoad(indirectGuideMotionImage, pixel).xy;
+    if (!isFiniteNrd(vec3(interfaceMotion, 0.0))) { interfaceMotion = vec2(0.0); }
+    float encodedPreviousDepth = imageLoad(composeBaseEmissionImage, pixel).a;
+    bool usesEnvironmentMotion = isFiniteNrd(encodedPreviousDepth) && encodedPreviousDepth < 0.0;
+    float interfacePreviousDepth = abs(encodedPreviousDepth);
+    bool hasInterfacePreviousDepth = nrdPreviousDepthValid(interfacePreviousDepth);
+    vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    vec3 normal = normalizeNrdSafe(normalRoughness.xyz, vec3(0.0, 1.0, 0.0));
+    float roughness = clamp(normalRoughness.w, 0.0, 1.0);
+    vec4 specularMaterial = imageLoad(sharedSpecularAlbedoImage, pixel);
+    bool transparentMaterial = specularMaterial.a > 0.5;
+    NrdDirectGuide terminalGuide = loadNrdDirectGuide(pixel);
+    vec3 diffAlbedo = max(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.05));
+
+    if (NRD_SEPARATE_DIRECT_ENABLED == 0u) { return; }
+
+    vec3 directGuideNormal = normal;
+    float directGuideRoughness = roughness;
+    vec2 directGuideMotion = interfaceMotion;
+    float directGuideDepth = linearDepth;
+    float directGuidePreviousDepth = interfacePreviousDepth;
+    bool directGuideValid = terminalGuide.valid;
+    if (directGuideValid) {
+        directGuideNormal = terminalGuide.normal;
+        directGuideRoughness = terminalGuide.roughness;
+        directGuideMotion = terminalGuide.motion;
+        directGuideDepth = terminalGuide.depth;
+        directGuidePreviousDepth = terminalGuide.previousDepth;
+    }
+    bool directMotionValid = directGuideValid || hasInterfacePreviousDepth;
+    float directMotionDepth = directMotionValid ? directGuidePreviousDepth - directGuideDepth : 0.0;
+    imageStore(nrdDirectMotionVectorImage, directPixel, vec4(directGuideMotion, directMotionDepth, 0.0));
+    vec4 packedDirectNormal = NRD_FrontEnd_PackNormalAndRoughness(
+        directGuideNormal, directGuideRoughness,
+        NRD_MODE != 2u && transparentMaterial && terminalGuide.terminal ? 2.0 : (transparentMaterial ? 1.0 : 0.0));
+    if (NRD_MODE == 2u && transparentMaterial && terminalGuide.valid && terminalGuide.terminal) {
+        precise vec3 n = imageLoad(directLightGuideNormalRoughnessImage, pixel).xyz;
+        n /= sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        n /= abs(n.x) + abs(n.y) + abs(n.z);
+        precise float yBase = n.y * .5 + .5;
+        precise float r = max(directGuideRoughness, 1.5 / 512.0);
+        precise vec3 encoded = vec3(n.x * .5 + yBase, yBase - n.x * .5, (n.z < 0 ? -r : r) * .5 + .5);
+        precise vec3 quantized = floor(clamp(encoded, vec3(0), vec3(1)) * 1023.0 + .5);
+        packedDirectNormal = vec4(quantized / 1023.0, 2.0 / 3.0);
+    }
+    imageStore(nrdDirectNormalRoughnessImage, directPixel, packedDirectNormal);
+    imageStore(nrdDirectLinearDepthImage, directPixel, vec4(directGuideDepth, 0.0, 0.0, 0.0));
+
+    vec4 directDiffuse = imageLoad(directDiffuseRadianceImage, pixel);
+    vec4 directSpecular = imageLoad(directSpecularRadianceImage, pixel);
+    bool hasDirectDiffuseSample = directDiffuse.a > 0.0 && isFiniteNrd(directDiffuse);
+    bool hasDirectSpecularSample = directSpecular.a > 0.0 && isFiniteNrd(directSpecular);
+    vec3 directSpecularRadiance = hasDirectSpecularSample ? sanitizeNrdRadiance(directSpecular.rgb) : vec3(0.0);
+    vec3 demodDirectSpecular = vec3(0);
+    if (any(greaterThan(directSpecularRadiance, vec3(0)))) {
+        vec3 directSpecularFactor = nrdSpecularMaterialFactor(pixel, size, directGuideNormal, directGuideRoughness,
+            specularMaterial, transparentMaterial);
+        demodDirectSpecular = suppressIsolatedGlossyFirefly(pixel, safeDiv(directSpecularRadiance, directSpecularFactor),
+            directGuideNormal, directGuideRoughness, directGuideDepth, NRD_FIREFLY_DIRECT_SPECULAR, transparentMaterial, terminalGuide);
+    }
+    demodDirectSpecular = sanitizeRelaxRadiance(demodDirectSpecular);
+    vec3 demodDirectDiffuse = sanitizeRelaxRadiance(
+        safeDiv(hasDirectDiffuseSample ? sanitizeNrdRadiance(directDiffuse.rgb) : vec3(0.0), diffAlbedo));
+    bool directDynamicNeighborhood = false;
+    float reconstructedDirectDistance = 0;
+    float rawDirectHitDistance = imageLoad(directHitDistanceImage, pixel).r;
+    bool directDynamicBlocker = isFiniteNrd(rawDirectHitDistance) && rawDirectHitDistance < -1e-6;
+    bool filterDirect = false;
+    if (NRD_MODE == 2u && (!transparentMaterial || directGuideValid) && filterDirectTile != 0) {
+        filterDirect = directDynamicBlocker || imageLoad(nrdDirectConfidenceImage, pixel).r < .99;
+        if (!filterDirect) {
+            for (int y = -1; y <= 1; ++y)
+                for (int x = -1; x <= 1; ++x)
+                    filterDirect = filterDirect || nrdDiffuseReconstructionIrradiance[nrdDirectTileIndex(pixel + ivec2(x, y))].w < -1e-6;
+        }
+    }
+    if (filterDirect) {
+        vec3 diffuseSum = vec3(0), specularSum = vec3(0);
+        float weightSum = 0;
+        float distanceSum = 0;
+        bool dynamicNeighborhood = imageLoad(nrdDirectConfidenceImage, pixel).r < .99;
+        for (int y = -2; y <= 2; ++y)
+            for (int x = -2; x <= 2; ++x) {
+                ivec2 q = pixel + ivec2(x, y);
+                if (any(lessThan(q, ivec2(0))) || any(greaterThanEqual(q, size))) continue;
+                int index = nrdDirectTileIndex(q);
+                vec4 neighborGuide = nrdDiffuseReconstructionNormalDepth[index];
+                if (neighborGuide.w <= 0 || abs(neighborGuide.w - directGuideDepth) > max(.03, directGuideDepth * .02) ||
+                    dot(neighborGuide.xyz, directGuideNormal) < .95 ||
+                    nrdDiffuseReconstructionMaterial[index].w != float(transparentMaterial)) continue;
+                vec4 diffuseSample = nrdDiffuseReconstructionIrradiance[index];
+                vec3 specularSample = nrdDiffuseReconstructionMaterial[index].rgb;
+                float w = float((3 - abs(x)) * (3 - abs(y)));
+                diffuseSum += diffuseSample.rgb * w;
+                specularSum += specularSample * w;
+                weightSum += w;
+                distanceSum += abs(diffuseSample.w) * w;
+                dynamicNeighborhood = dynamicNeighborhood || diffuseSample.w < -1e-6;
+            }
+        directDynamicNeighborhood = dynamicNeighborhood;
+        if (dynamicNeighborhood && weightSum > 0) {
+            demodDirectDiffuse = sanitizeRelaxRadiance(diffuseSum / weightSum);
+            if (!hasDirectDiffuseSample) {
+                reconstructedDirectDistance = max(distanceSum / weightSum, .001);
+                hasDirectDiffuseSample = true;
+            }
+            if (hasDirectSpecularSample && any(greaterThan(directSpecularRadiance, vec3(0)))) {
+                vec3 factor = nrdSpecularMaterialFactor(pixel, size, directGuideNormal, directGuideRoughness,
+                    specularMaterial, transparentMaterial);
+                demodDirectSpecular = sanitizeRelaxRadiance(safeDiv(specularSum / weightSum, factor));
+            }
+        }
+    }
+
+    if (NRD_MODE == 2u)
+        imageStore(nrdDirectMotionVectorImage, directPixel, vec4(directGuideMotion, directMotionDepth,
+            directDynamicNeighborhood || directDynamicBlocker ? -1.0 : 0.0));
+    float decodedDirectHitDistance = max(isFiniteNrd(rawDirectHitDistance) ? abs(rawDirectHitDistance) : 0.0, reconstructedDirectDistance);
+    bool hasDirectSample = hasDirectDiffuseSample || hasDirectSpecularSample;
+    float directHitDistance = hasDirectSample ? NRD_FrontEnd_TrimHitDistance(decodedDirectHitDistance, 1e-3) : 0.0;
+    imageStore(nrdDirectDiffuseRadianceImage, directPixel,
+               RELAX_FrontEnd_PackRadianceAndHitDist(demodDirectDiffuse,
+                                                     hasDirectDiffuseSample ? directHitDistance : 0.0, true));
+    imageStore(nrdDirectSpecularRadianceImage, directPixel,
+               RELAX_FrontEnd_PackRadianceAndHitDist(demodDirectSpecular,
+                                                     hasDirectSpecularSample ? directHitDistance : 0.0, true));
+    if (NRD_MODE != 2u)
+        imageStore(nrdDirectConfidenceImage, directPixel, vec4(!hasDirectSample || directMotionValid ? 1.0 : 0.0));
+    else if (hasDirectSample && !directMotionValid)
+        imageStore(nrdDirectConfidenceImage, directPixel, vec4(0.0));
+    imageStore(nrdDirectDisocclusionThresholdMixImage, directPixel,
+               vec4((transparentMaterial || directDynamicBlocker || specularMaterial.a > 0.125) ? 1.0 : 0.0));
 }

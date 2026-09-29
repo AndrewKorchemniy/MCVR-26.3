@@ -132,7 +132,6 @@ class GraphicsPipelineBuilder {
     GraphicsPipelineBuilder &definePipelineLayout(std::shared_ptr<DescriptorTable> descriptorTable);
     GraphicsPipelineBuilder &definePipelineLayout(VkPipelineLayout pipelineLayout);
 
-    // PipelineBuilder &defineDepthStencilState(VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo);
     GraphicsPipelineBuilder &defineDepthStencilState(DepthStencilState depthStencilState);
 
     std::shared_ptr<vk::GraphicsPipeline> build(std::shared_ptr<Device> device);
@@ -152,9 +151,6 @@ class GraphicsPipelineBuilder {
     ViewPortAndScissor viewPortAndScissor_{};
     VkPipelineViewportStateCreateInfo viewportStateCreateInfo_{};
 
-    // Default rasterization
-    // Note: depth bias and using polygon modes other than fill require changes to logical device creation
-    // (device features)
     VkPipelineRasterizationStateCreateInfo rasterizationStateCreateInfo_ = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .depthClampEnable = VK_FALSE,
@@ -169,8 +165,6 @@ class GraphicsPipelineBuilder {
         .lineWidth = 1.0f,
     };
 
-    // Default multisampling
-    // Note: using multisampling also requires turning on device features
     VkPipelineMultisampleStateCreateInfo multisampleStateCreateInfo_ = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
@@ -180,8 +174,6 @@ class GraphicsPipelineBuilder {
         .alphaToOneEnable = VK_FALSE,
     };
 
-    // Default color blend state
-    // attachments can be filled with ColorBlendAttachmentStateBuilder
     VkPipelineColorBlendStateCreateInfo colorBlendState_ = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .logicOpEnable = VK_FALSE,
@@ -191,7 +183,6 @@ class GraphicsPipelineBuilder {
         .blendConstants = {0.0f},
     };
 
-    // Default depth stencil state
     VkPipelineDepthStencilStateCreateInfo depthStencilState_ = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
         .depthTestEnable = VK_FALSE,
@@ -215,6 +206,7 @@ class RayTracingPipelineBuilder {
     struct ShaderStageBuilder {
         RayTracingPipelineBuilder &parent;
         std::vector<VkPipelineShaderStageCreateInfo> shaderStageCreateInfos;
+        std::vector<std::shared_ptr<Shader>> shaders;
 
         ShaderStageBuilder(RayTracingPipelineBuilder &parent);
 
@@ -242,6 +234,7 @@ class RayTracingPipelineBuilder {
     ShaderStageBuilder &beginShaderStage();
     ShaderGroupBuilder &beginShaderGroup();
     RayTracingPipelineBuilder &definePipelineLayout(std::shared_ptr<DescriptorTable> descriptorTable);
+    RayTracingPipelineBuilder &defineMaxRayRecursionDepth(uint32_t depth);
     std::shared_ptr<RayTracingPipeline> build(std::shared_ptr<Device> device);
 
   private:
@@ -249,6 +242,7 @@ class RayTracingPipelineBuilder {
     ShaderGroupBuilder shaderGroupBuilder_;
 
     VkPipelineLayout pipelineLayout_;
+    uint32_t maxRayRecursionDepth_ = 1;
 };
 
 template <typename T>
@@ -271,11 +265,13 @@ class ComputePipelineBuilder {
   public:
     ComputePipelineBuilder &defineShader(std::shared_ptr<Shader> shader);
     ComputePipelineBuilder &definePipelineLayout(std::shared_ptr<DescriptorTable> descriptorTable);
+    ComputePipelineBuilder &defineSpecializationConstants(std::vector<uint32_t> values);
 
     std::shared_ptr<ComputePipeline> build(std::shared_ptr<Device> device);
 
   private:
-    VkShaderModule shaderModule_ = VK_NULL_HANDLE;
+    std::shared_ptr<Shader> shader_;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+    std::vector<uint32_t> specializationConstants_;
 };
-}; // namespace vk
+};

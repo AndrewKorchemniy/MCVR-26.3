@@ -1,5 +1,6 @@
 #include "fsr3_upscaler.hpp"
 #include "core/render/modules/world/fsr_upscaler/fsr_setup.hpp"
+#include "core/vulkan/result.hpp"
 #include <algorithm>
 #include <cstring>
 #include <iostream>
@@ -45,10 +46,9 @@ static const char *toFFXReturnCodeString(ffx::ReturnCode code) {
         default: return "Unknown";
     }
 }
-#endif // MCVR_ENABLE_FFX_UPSCALER
+#endif
 
 namespace mcvr {
-
 FSR3Upscaler::FSR3Upscaler() {
 #ifdef MCVR_ENABLE_FFX_UPSCALER
     m_fsrContext = nullptr;
@@ -68,32 +68,17 @@ bool FSR3Upscaler::isAvailable() const {
 }
 
 bool FSR3Upscaler::initialize(const UpscalerConfig &config) {
-#ifdef DEBUG
-    std::cout << "FSR3Upscaler::initialize called" << std::endl;
-#endif
-
 #ifndef MCVR_ENABLE_FFX_UPSCALER
     (void)config;
     std::cerr << "FSR3Upscaler::initialize: FSR3 support not compiled in" << std::endl;
     return false;
 #else
     if (m_initialized) {
-#    ifdef DEBUG
-        std::cerr << "[DEBUG] FSR3: Destroying old context" << std::endl;
-        std::flush(std::cerr);
-#    endif
         destroy();
     }
 
-#    ifdef DEBUG
-    std::cerr << "[DEBUG] FSR3: Assigning handles" << std::endl;
-#    endif
     m_device = config.device;
     m_physicalDevice = config.physicalDevice;
-#    ifdef DEBUG
-    std::cerr << "[DEBUG] FSR3: Device = " << (void *)m_device << std::endl;
-    std::flush(std::cerr);
-#    endif
 
     m_commandPool = config.commandPool;
     m_graphicsQueue = config.graphicsQueue;
@@ -105,19 +90,6 @@ bool FSR3Upscaler::initialize(const UpscalerConfig &config) {
     m_displayWidth = config.maxDisplayWidth;
     m_displayHeight = config.maxDisplayHeight;
 
-#    ifdef DEBUG
-    std::cout << "[FSR3] init config: render=" << m_renderWidth << "x" << m_renderHeight
-              << " display=" << m_displayWidth << "x" << m_displayHeight
-              << " quality=" << static_cast<int>(config.qualityMode) << " hdr=" << config.hdr
-              << " depthInverted=" << config.depthInverted << " depthInfinite=" << config.depthInfinite
-              << " autoExposure=" << config.autoExposure << " sharpening=" << config.enableSharpening
-              << " sharpness=" << config.sharpness << std::endl;
-#    endif
-
-#    ifdef DEBUG
-    std::cerr << "[DEBUG] FSR3: Calling createContext()" << std::endl;
-    std::flush(std::cerr);
-#    endif
     if (!createContext()) {
         std::cerr << "FSR3Upscaler::initialize: Failed to create FFX context" << std::endl;
         return false;
@@ -132,15 +104,6 @@ bool FSR3Upscaler::initialize(const UpscalerConfig &config) {
     m_jitterIndex = 0;
     m_initialized = true;
 
-#    ifdef DEBUG
-    std::cerr << "=== FSR3 INITIALIZED ===" << std::endl;
-    std::cerr << "Render: " << m_renderWidth << "x" << m_renderHeight << " -> Display: " << m_displayWidth << "x"
-              << m_displayHeight << std::endl;
-    std::cerr << "Context: " << (m_fsrContext != nullptr ? "OK" : "FAILED") << std::endl;
-#    endif
-
-    m_debugLogged = false;
-
     return true;
 #endif
 }
@@ -149,54 +112,7 @@ bool FSR3Upscaler::createContext() {
 #ifndef MCVR_ENABLE_FFX_UPSCALER
     return false;
 #else
-#    ifdef DEBUG
-    std::cerr << "[DEBUG] FSR3: Entering createContext" << std::endl;
-    std::flush(std::cerr);
-#    endif
 
-    // Query available providers for debug visibility, but let FFX choose the best one.
-    std::vector<uint64_t> fsrVersionIds;
-    std::vector<const char *> fsrVersionNames;
-    {
-        ffx::QueryDescGetVersions versionQuery{};
-        versionQuery.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-#    ifdef _WIN32
-        // On Windows, FFX SDK assumes 'device' is ID3D12Device* and crashes when passed a VkDevice.
-        // Passing nullptr avoids this check and safely uses the internal FSR3 provider.
-        versionQuery.device = nullptr;
-#    else
-        versionQuery.device = m_device;
-#    endif
-        uint64_t versionCount = 0;
-        versionQuery.outputCount = &versionCount;
-
-        ffxQuery(nullptr, &versionQuery.header);
-
-        if (versionCount > 0) {
-            fsrVersionIds.resize(versionCount);
-            fsrVersionNames.resize(versionCount);
-            versionQuery.versionIds = fsrVersionIds.data();
-            versionQuery.versionNames = fsrVersionNames.data();
-            versionQuery.outputCount = &versionCount;
-            ffxQuery(nullptr, &versionQuery.header);
-
-#    ifdef DEBUG
-            std::cout << "FSR3: Found " << versionCount << " available FSR version(s):" << std::endl;
-            for (uint64_t i = 0; i < versionCount; ++i) {
-                std::cout << "  Version[" << i << "] = 0x" << std::hex << fsrVersionIds[i] << std::dec;
-                if (i < fsrVersionNames.size() && fsrVersionNames[i] != nullptr) {
-                    std::cout << " (" << fsrVersionNames[i] << ")";
-                }
-                std::cout << std::endl;
-            }
-#    endif
-
-        } else {
-            std::cerr << "FSR3: No alternative versions available" << std::endl;
-        }
-    }
-
-    // Check for required Vulkan extensions
     uint32_t extensionCount = 0;
     vkEnumerateDeviceExtensionProperties(m_physicalDevice, nullptr, &extensionCount, nullptr);
     std::vector<VkExtensionProperties> extensions(extensionCount);
@@ -207,10 +123,6 @@ bool FSR3Upscaler::createContext() {
                            [&](const VkExtensionProperties &ext) { return strcmp(ext.extensionName, name) == 0; });
     };
 
-#    ifdef DEBUG
-    std::cout << "FSR3: Checking required extensions..." << std::endl;
-#    endif
-
     const char *requiredExtensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
                                         VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
                                         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
@@ -218,15 +130,11 @@ bool FSR3Upscaler::createContext() {
 
     for (const char *ext : requiredExtensions) {
         bool available = hasExtension(ext);
-#    ifdef DEBUG
-        std::cerr << "  " << ext << ": " << (available ? "OK" : "MISSING") << std::endl;
-#    endif
         if (!available && strcmp(ext, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == 0) {
             std::cerr << "FSR3: Missing required extension: " << ext << std::endl;
         }
     }
 
-    // Create Vulkan backend use volk's loaded function pointers via our wrapper
     ffx::CreateBackendVKDesc backendDesc{};
     backendDesc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_VK;
     backendDesc.vkDevice = m_device;
@@ -242,14 +150,6 @@ bool FSR3Upscaler::createContext() {
     PFN_vkCreateComputePipelines testCreateComputePipelines =
         (PFN_vkCreateComputePipelines)deviceProcAddr(m_device, "vkCreateComputePipelines");
     PFN_vkCmdDispatch testCmdDispatch = (PFN_vkCmdDispatch)deviceProcAddr(m_device, "vkCmdDispatch");
-    PFN_vkCreateSampler testCreateSampler = (PFN_vkCreateSampler)deviceProcAddr(m_device, "vkCreateSampler");
-
-#    ifdef DEBUG
-    std::cerr << "FSR3: Function pointer check:" << std::endl;
-    std::cerr << "  vkCreateComputePipelines: " << (void *)testCreateComputePipelines << std::endl;
-    std::cerr << "  vkCmdDispatch: " << (void *)testCmdDispatch << std::endl;
-    std::cerr << "  vkCreateSampler: " << (void *)testCreateSampler << std::endl;
-#    endif
 
     if (testCreateComputePipelines == nullptr || testCmdDispatch == nullptr) {
         std::cerr << "FSR3 ERROR: Failed to get required Vulkan function pointers" << std::endl;
@@ -257,9 +157,6 @@ bool FSR3Upscaler::createContext() {
     }
 
     backendDesc.vkDeviceProcAddr = deviceProcAddr;
-#    ifdef DEBUG
-    std::cerr << "FSR3: vkDeviceProcAddr = " << reinterpret_cast<void *>(deviceProcAddr) << std::endl;
-#    endif
 
     ffx::CreateContextDescUpscale createFsr{};
     createFsr.maxUpscaleSize.width = m_displayWidth;
@@ -276,19 +173,10 @@ bool FSR3Upscaler::createContext() {
     createFsr.fpMessage = mcvr::fsr::messageCallback;
 
     m_fsrContext = nullptr;
-    ffx::ReturnCode retCode = ffx::CreateContext(reinterpret_cast<ffx::Context &>(m_fsrContext), nullptr, createFsr,
-                                                 backendDesc);
+    ffx::ReturnCode retCode =
+        ffx::CreateContext(reinterpret_cast<ffx::Context &>(m_fsrContext), nullptr, createFsr, backendDesc);
 
     if (retCode == ffx::ReturnCode::Ok) {
-        ffx::InitHelper<ffxQueryGetProviderVersion> providerQuery{};
-        if (ffx::Query(reinterpret_cast<ffx::Context &>(m_fsrContext), providerQuery) == ffx::ReturnCode::Ok &&
-            providerQuery.versionName != nullptr) {
-            std::cout << "FSR3: Active provider = " << providerQuery.versionName << " (0x" << std::hex
-                      << providerQuery.versionId << std::dec << ")" << std::endl;
-        }
-#    ifdef DEBUG
-        std::cout << "FSR3: CreateContext succeeded!" << std::endl;
-#    endif
         m_contextCreated = true;
         return true;
     }
@@ -316,11 +204,23 @@ void FSR3Upscaler::destroyContext() {
         return;
     }
 
-    if (m_device != VK_NULL_HANDLE) { vkDeviceWaitIdle(m_device); }
+    if (m_device != VK_NULL_HANDLE) {
+        VkResult waitResult = vkDeviceWaitIdle(m_device);
+        if (waitResult != VK_SUCCESS) {
+            std::cerr << "FSR3: vkDeviceWaitIdle before context destruction failed (" << vk::resultName(waitResult)
+                      << ", " << static_cast<int32_t>(waitResult) << ")" << std::endl;
+        }
+    }
 
     ffx::ReturnCode result = ffx::DestroyContext(reinterpret_cast<ffx::Context &>(m_fsrContext));
     if (result != ffx::ReturnCode::Ok) {
-        if (m_device != VK_NULL_HANDLE) { vkDeviceWaitIdle(m_device); }
+        if (m_device != VK_NULL_HANDLE) {
+            VkResult waitResult = vkDeviceWaitIdle(m_device);
+            if (waitResult != VK_SUCCESS) {
+                std::cerr << "FSR3: vkDeviceWaitIdle before context destruction retry failed ("
+                          << vk::resultName(waitResult) << ", " << static_cast<int32_t>(waitResult) << ")" << std::endl;
+            }
+        }
         result = ffx::DestroyContext(reinterpret_cast<ffx::Context &>(m_fsrContext));
     }
     if (result != ffx::ReturnCode::Ok) {
@@ -339,29 +239,6 @@ void FSR3Upscaler::dispatch(const UpscalerInput &input) {
     return;
 #else
     if (!m_initialized || !m_contextCreated) { return; }
-
-    if (!m_debugLogged || input.renderWidth != m_lastRenderWidth || input.renderHeight != m_lastRenderHeight ||
-        input.displayWidth != m_lastDisplayWidth || input.displayHeight != m_lastDisplayHeight) {
-        m_debugLogged = true;
-        m_lastRenderWidth = input.renderWidth;
-        m_lastRenderHeight = input.renderHeight;
-        m_lastDisplayWidth = input.displayWidth;
-        m_lastDisplayHeight = input.displayHeight;
-
-#    ifdef DEBUG
-        std::cout << "[FSR3] dispatch: render=" << input.renderWidth << "x" << input.renderHeight
-                  << " display=" << input.displayWidth << "x" << input.displayHeight
-                  << " colorFmt=" << static_cast<int>(input.colorFormat)
-                  << " depthFmt=" << static_cast<int>(input.depthFormat)
-                  << " mvFmt=" << static_cast<int>(input.motionVectorFormat)
-                  << " outputFmt=" << static_cast<int>(input.outputFormat)
-                  << " depthFfx=" << static_cast<int>(mcvr::fsr::vkToFfxFormat(input.depthFormat)) << " jitter=("
-                  << input.jitterOffsetX << "," << input.jitterOffsetY << ")" << " mvScale=("
-                  << input.motionVectorScaleX << "," << input.motionVectorScaleY << ")" << " reset=" << input.reset
-                  << " preExposure=" << input.preExposure << " exposure=" << (input.exposureImage != VK_NULL_HANDLE)
-                  << " reactive=" << (input.reactiveImage != VK_NULL_HANDLE) << std::endl;
-#    endif
-    }
 
     auto createResource = [](VkImage image, uint32_t width, uint32_t height, VkFormat format, FfxApiResourceState state,
                              FfxApiResourceUsage usage = FFX_API_RESOURCE_USAGE_READ_ONLY) -> FfxApiResource {
@@ -383,22 +260,19 @@ void FSR3Upscaler::dispatch(const UpscalerInput &input) {
     const VkFormat depthFormat = input.depthFormat != VK_FORMAT_UNDEFINED ? input.depthFormat : VK_FORMAT_D32_SFLOAT;
     const VkFormat motionVectorFormat =
         input.motionVectorFormat != VK_FORMAT_UNDEFINED ? input.motionVectorFormat : VK_FORMAT_R16G16_SFLOAT;
-    const VkFormat outputFormat =
-        input.outputFormat != VK_FORMAT_UNDEFINED ? input.outputFormat : colorFormat;
+    const VkFormat outputFormat = input.outputFormat != VK_FORMAT_UNDEFINED ? input.outputFormat : colorFormat;
 
     ffx::DispatchDescUpscale dispatchUpscale{};
     dispatchUpscale.commandList = input.commandBuffer;
 
-    dispatchUpscale.color =
-        createResource(input.colorImage, input.renderWidth, input.renderHeight, colorFormat,
-                       FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
+    dispatchUpscale.color = createResource(input.colorImage, input.renderWidth, input.renderHeight, colorFormat,
+                                           FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
 
     dispatchUpscale.depth = createResource(input.depthImage, input.renderWidth, input.renderHeight, depthFormat,
                                            FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
 
-    dispatchUpscale.motionVectors =
-        createResource(input.motionVectorImage, input.renderWidth, input.renderHeight, motionVectorFormat,
-                       FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
+    dispatchUpscale.motionVectors = createResource(input.motionVectorImage, input.renderWidth, input.renderHeight,
+                                                   motionVectorFormat, FFX_API_RESOURCE_STATE_PIXEL_COMPUTE_READ);
 
     if (input.exposureImage != VK_NULL_HANDLE) {
         dispatchUpscale.exposure =
@@ -416,44 +290,34 @@ void FSR3Upscaler::dispatch(const UpscalerInput &input) {
 
     dispatchUpscale.transparencyAndComposition = {};
 
-    // Output resource
     dispatchUpscale.output = createResource(input.outputImage, input.displayWidth, input.displayHeight, outputFormat,
-                                            FFX_API_RESOURCE_STATE_UNORDERED_ACCESS,
-                                            FFX_API_RESOURCE_USAGE_UAV);
+                                            FFX_API_RESOURCE_STATE_UNORDERED_ACCESS, FFX_API_RESOURCE_USAGE_UAV);
 
-    // Jitter offset
     dispatchUpscale.jitterOffset.x = input.jitterOffsetX;
     dispatchUpscale.jitterOffset.y = input.jitterOffsetY;
 
-    // Motion vector scale
     dispatchUpscale.motionVectorScale.x = input.motionVectorScaleX;
     dispatchUpscale.motionVectorScale.y = input.motionVectorScaleY;
 
-    // Resolution
     dispatchUpscale.renderSize.width = input.renderWidth;
     dispatchUpscale.renderSize.height = input.renderHeight;
     dispatchUpscale.upscaleSize.width = input.displayWidth;
     dispatchUpscale.upscaleSize.height = input.displayHeight;
 
-    // Sharpening
     dispatchUpscale.enableSharpening = input.enableSharpening;
     dispatchUpscale.sharpness = input.sharpness;
 
-    // Frame parameters
     dispatchUpscale.frameTimeDelta = input.frameTimeDelta;
     dispatchUpscale.preExposure = input.preExposure;
     dispatchUpscale.reset = input.reset;
 
-    // Camera parameters
     dispatchUpscale.cameraNear = input.cameraNear;
     dispatchUpscale.cameraFar = input.cameraFar;
     dispatchUpscale.cameraFovAngleVertical = input.cameraFovVertical;
     dispatchUpscale.viewSpaceToMetersFactor = 0.0f;
 
-    // Flags
     dispatchUpscale.flags = 0;
 
-    // Dispatch FSR3
     static int dispatchCount = 0;
     ffx::ReturnCode retCode = ffx::Dispatch(reinterpret_cast<ffx::Context &>(m_fsrContext), dispatchUpscale);
     if (retCode != ffx::ReturnCode::Ok) {
@@ -461,14 +325,7 @@ void FSR3Upscaler::dispatch(const UpscalerInput &input) {
                   << static_cast<uint32_t>(retCode) << ")" << std::endl;
         return;
     }
-    // else {
-    //     dispatchCount++;
-    //     if (dispatchCount == 1 || dispatchCount % 300 == 0) {
-    //         std::cerr << "FSR3 dispatch OK (count: " << dispatchCount << ")" << std::endl;
-    //     }
-    // }
 
-    // Increment jitter index
     m_jitterIndex++;
 #endif
 }
@@ -482,7 +339,6 @@ void FSR3Upscaler::resize(uint32_t renderWidth, uint32_t renderHeight, uint32_t 
 #else
     if (!m_initialized) { return; }
 
-    // Recreate context with new resolution
     m_renderWidth = renderWidth;
     m_renderHeight = renderHeight;
     m_displayWidth = displayWidth;
@@ -491,7 +347,6 @@ void FSR3Upscaler::resize(uint32_t renderWidth, uint32_t renderHeight, uint32_t 
     destroyContext();
     createContext();
 
-    // Re-query jitter phase count
     ffx::QueryDescUpscaleGetJitterPhaseCount jitterQuery{};
     jitterQuery.renderWidth = m_renderWidth;
     jitterQuery.displayWidth = m_displayWidth;
@@ -513,5 +368,4 @@ void FSR3Upscaler::destroy() {
     m_initialized = false;
 #endif
 }
-
-} // namespace mcvr
+}

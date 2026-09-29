@@ -1,8 +1,26 @@
 file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS "*.cpp")
+if(NOT MCVR_ENABLE_PROFILER)
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/profiler/.*\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com_radiance_client_profiler_Profiler\\.cpp$")
+endif()
+if(MCVR_UI_BACKEND STREQUAL "OPENGL")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/render/modules/ui_module\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com_radiance_client_proxy_vulkan_ShaderProxy\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com_radiance_client_proxy_vulkan_VulkanUiProxy\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com_radiance_client_proxy_vulkan_DrawCommandProxy_Overlay\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com_radiance_client_proxy_vulkan_PipelineStateProxy_.*\\.cpp$")
+else()
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/com_radiance_client_opengl_ui_OpenGLUiProxy\\.cpp$")
+    list(FILTER SOURCE_FILES EXCLUDE REGEX ".*/render/opengl_ui/.*\\.cpp$")
+endif()
 
 add_library(core SHARED ${SOURCE_FILES})
 target_link_libraries(core PUBLIC ngx ${JNI_LIBRARIES} VulkanMemoryAllocator volk::volk glfw minizip tinyexpr
                                    nlohmann_json::nlohmann_json)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND MCVR_UI_BACKEND STREQUAL "OPENGL")
+    find_package(X11 REQUIRED)
+    target_link_libraries(core PRIVATE X11::X11)
+endif()
 
 if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
     set(MCVR_VULKAN_SDK "$ENV{VULKAN_SDK}")
@@ -15,12 +33,21 @@ find_path(SHADERC_INCLUDE_DIR shaderc/shaderc.hpp
     "${MCVR_VULKAN_SDK}/x86_64/include"
     "${MCVR_VULKAN_SDK}/include"
 )
-find_library(SHADERC_LIBRARY
+find_library(SHADERC_LIBRARY_RELEASE
     NAMES shaderc_combined shaderc_shared shaderc
     HINTS
     "${MCVR_VULKAN_SDK}/x86_64/lib"
     "${MCVR_VULKAN_SDK}/lib"
 )
+if(MSVC)
+    find_library(SHADERC_LIBRARY_DEBUG
+        NAMES shaderc_combinedd shaderc_sharedd shadercd
+        HINTS
+        "${MCVR_VULKAN_SDK}/lib"
+    )
+endif()
+include(SelectLibraryConfigurations)
+select_library_configurations(SHADERC)
 
 if(NOT SHADERC_INCLUDE_DIR OR NOT SHADERC_LIBRARY)
     message(FATAL_ERROR "shaderc was not found. Set VULKAN_SDK or install shaderc.")
@@ -32,9 +59,21 @@ target_compile_definitions(core PUBLIC VK_NO_PROTOTYPES CORE_LIB)
 if(USE_AMD)
     target_compile_definitions(core PUBLIC USE_AMD)
 endif()
+if(MCVR_ENABLE_PROFILER)
+    target_compile_definitions(core PUBLIC MCVR_ENABLE_PROFILER)
+endif()
+if(MCVR_UI_BACKEND STREQUAL "OPENGL")
+    target_compile_definitions(core PUBLIC MCVR_UI_BACKEND_OPENGL)
+else()
+    target_compile_definitions(core PUBLIC MCVR_UI_BACKEND_VULKAN)
+endif()
 if(MCVR_ENABLE_FFX_UPSCALER)
-    # amd_fidelityfx_vk provides the main FFX API (ffxCreateContext, ffxQuery, etc.)
-    target_link_libraries(core PUBLIC amd_fidelityfx_vk ffx_backend_vk_x64 ffx_fsr3upscaler_x64)
+    target_link_libraries(core PUBLIC amd_fidelityfx_vk
+                                      ffx_backend_vk_x64
+                                      ffx_fsr3_x64
+                                      ffx_fsr3upscaler_x64
+                                      ffx_frameinterpolation_x64
+                                      ffx_opticalflow_x64)
     target_compile_definitions(core PUBLIC MCVR_ENABLE_FFX_UPSCALER)
 endif()
 if(MCVR_ENABLE_NRD)

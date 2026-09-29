@@ -45,6 +45,10 @@ struct SharcConfig {
     uint useLockBuffer;
     uint debugMode;
     uint updateDownsampleFactor;
+    uint resolveBaseEntry;
+    uint resolveEntryCount;
+    uint resolveFrameStride;
+    uint reserved;
 };
 
 layout(set = 4, binding = 0) readonly buffer SharcConfigBuffer {
@@ -77,7 +81,10 @@ SharcParameters makeSharcParameters() {
 
 void main() {
 #if USE_SHARC
-    uint entryIndex = gl_GlobalInvocationID.x;
+    const uint resolveInvocation = gl_GlobalInvocationID.x;
+    if (resolveInvocation >= sharcConfig.resolveEntryCount) { return; }
+
+    const uint entryIndex = sharcConfig.resolveBaseEntry + resolveInvocation;
     if (entryIndex >= sharcConfig.capacity) { return; }
 
     SharcResolveParameters resolveParameters;

@@ -2,9 +2,9 @@
 
 #include "common/shared.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
+#include <array>
 #include <memory>
 #include <vector>
-#include <array>
 
 struct SvgfInputs {
     std::shared_ptr<vk::DeviceLocalImage> directRadiance;
@@ -25,7 +25,7 @@ struct SvgfOutputs {
 };
 
 class SvgfDenoiser {
-public:
+  public:
     SvgfDenoiser();
     ~SvgfDenoiser();
 
@@ -42,7 +42,7 @@ public:
                  const SvgfOutputs &outputs,
                  uint32_t frameIndex);
 
-private:
+  private:
     struct SvgfPipeline {
         VkPipeline pipeline = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -54,24 +54,22 @@ private:
     void createPipelines();
     void createResources();
     void createSamplers();
-    
+
     std::shared_ptr<vk::Device> m_device;
     std::shared_ptr<vk::VMA> m_vma;
     std::shared_ptr<vk::PhysicalDevice> m_physicalDevice;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
     uint32_t m_contextCount = 0;
-    
+
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
 
-    // --- SVGF GI Resources (MCVR-2 style) ---
     struct FrameHistory {
         std::shared_ptr<vk::DeviceLocalImage> giRadiance;
         std::shared_ptr<vk::DeviceLocalImage> giMoments;
         std::shared_ptr<vk::DeviceLocalImage> giDepth;
         std::shared_ptr<vk::DeviceLocalImage> giNormal;
         std::shared_ptr<vk::DeviceLocalImage> giHistoryLength;
-        // Direct lighting history (shadows)
         std::shared_ptr<vk::DeviceLocalImage> directRadiance;
         std::shared_ptr<vk::DeviceLocalImage> directMoments;
     };
@@ -80,10 +78,8 @@ private:
     uint32_t m_historyWriteIdx = 1;
     bool m_needsHistoryClear = true;
 
-    // MCVR-2 style: demodulated radiance for GI
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> m_demodulatedGiImages;
 
-    // --- SVGF Specular Resources ---
     struct SpecularHistory {
         std::shared_ptr<vk::DeviceLocalImage> specRadiance;
         std::shared_ptr<vk::DeviceLocalImage> specMoments;
@@ -98,12 +94,10 @@ private:
         std::shared_ptr<vk::DeviceLocalImage> giColorPong;
         std::shared_ptr<vk::DeviceLocalImage> giVariancePing;
         std::shared_ptr<vk::DeviceLocalImage> giVariancePong;
-        // Specular ping-pong
         std::shared_ptr<vk::DeviceLocalImage> specColorPing;
         std::shared_ptr<vk::DeviceLocalImage> specColorPong;
         std::shared_ptr<vk::DeviceLocalImage> specVariancePing;
         std::shared_ptr<vk::DeviceLocalImage> specVariancePong;
-        // Direct light ping-pong
         std::shared_ptr<vk::DeviceLocalImage> directColorPing;
         std::shared_ptr<vk::DeviceLocalImage> directColorPong;
         std::shared_ptr<vk::DeviceLocalImage> directVariancePing;
@@ -111,24 +105,20 @@ private:
     };
     std::vector<FramePingPong> m_framePingPong;
 
-    // --- Pipelines (MCVR-2 style GI) ---
-    SvgfPipeline m_giPreparePipeline;      
-    SvgfPipeline m_giTemporalPipeline;     
-    SvgfPipeline m_giVariancePipeline;     
-    std::array<SvgfPipeline, 5> m_giAtrousPipelines;  
-    SvgfPipeline m_giModulatePipeline;     
-    
-    // Legacy pipelines (kept for compatibility)
-    SvgfPipeline m_reprojectPipeline;      
+    SvgfPipeline m_giPreparePipeline;
+    SvgfPipeline m_giTemporalPipeline;
+    SvgfPipeline m_giVariancePipeline;
+    std::array<SvgfPipeline, 5> m_giAtrousPipelines;
+    SvgfPipeline m_giModulatePipeline;
+
+    SvgfPipeline m_reprojectPipeline;
     SvgfPipeline m_combinePipeline;
     SvgfPipeline m_extractRoughnessPipeline;
 
-    // Specular pipelines
     SvgfPipeline m_specReprojectPipeline;
     SvgfPipeline m_specVariancePipeline;
     std::array<SvgfPipeline, 5> m_specAtrousPipelines;
 
-    // Direct light pipelines
     SvgfPipeline m_directTemporalPipeline;
     SvgfPipeline m_directMomentsFilterPipeline;
     SvgfPipeline m_directSpatialPipeline;

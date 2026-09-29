@@ -1,6 +1,8 @@
 #include "xess_sr_module.hpp"
 
+#include "core/profiler/profiler.hpp"
 #include "core/render/buffers.hpp"
+#include "core/render/frame_generation.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
@@ -254,7 +256,7 @@ void XessSrModule::initDescriptorTables() {
                                         .definePushConstant({
                                             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
                                             .offset = 0,
-                                            .size = sizeof(float) * 4 + sizeof(uint32_t) * 2,
+                                            .size = sizeof(MotionUpscalePushConstants),
                                         })
                                         .build(fw->device());
     }
@@ -396,6 +398,22 @@ XessSrModuleContext::XessSrModuleContext(std::shared_ptr<FrameworkContext> frame
                                          std::shared_ptr<XessSrModule> xessModule)
     : WorldModuleContext(frameworkContext, worldPipelineContext), xessModule_(xessModule) {}
 
+bool XessSrModuleContext::populateFrameGenerationInputs(mcvr::FrameGenerationInputs &inputs) {
+    auto module = xessModule_.lock();
+    if (module == nullptr || !module->initialized_ || deviceDepthImage == nullptr || xessMotionVectorImage == nullptr) {
+        return false;
+    }
+
+    inputs.depth = deviceDepthImage;
+    inputs.motionVector = xessMotionVectorImage;
+    inputs.renderWidth = module->renderWidth_;
+    inputs.renderHeight = module->renderHeight_;
+    inputs.motionVectorScale = glm::vec2(1.0f);
+    inputs.depthInverted = false;
+    inputs.cameraMotionIncluded = true;
+    return true;
+}
+
 bool XessSrModuleContext::checkCameraReset(const glm::vec3 &cameraPos, const glm::vec3 &cameraDir) {
     auto module = xessModule_.lock();
     if (module->firstFrame_) {
@@ -415,6 +433,7 @@ bool XessSrModuleContext::checkCameraReset(const glm::vec3 &cameraPos, const glm
 }
 
 void XessSrModuleContext::render() {
+    MCVR_PROFILE_SCOPE("native.XessSrModuleContext.render");
     auto module = xessModule_.lock();
     if (!module) return;
 
@@ -422,30 +441,33 @@ void XessSrModuleContext::render() {
     auto worldCommandBuffer = fwContext->worldCommandBuffer;
     auto mainQueueIndex = fwContext->framework.lock()->physicalDevice()->mainQueueIndex();
 
+    auto worldUBO =
+        static_cast<vk::Data::WorldUBO *>(Renderer::instance().buffers()->worldUniformBuffer()->mappedPtr());
+    if (!worldUBO) { return; }
+
     auto dispatchUpscaledFirstHitDepth = [&]() {
         worldCommandBuffer->barriersBufferImage(
-            {},
-            {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-              .oldLayout = inputFirstHitDepthImage->imageLayout(),
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcQueueFamilyIndex = mainQueueIndex,
-              .dstQueueFamilyIndex = mainQueueIndex,
-              .image = inputFirstHitDepthImage,
-              .subresourceRange = vk::wholeColorSubresourceRange},
-             {.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              .dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-              .oldLayout = upscaledFirstHitDepthImage->imageLayout(),
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcQueueFamilyIndex = mainQueueIndex,
-              .dstQueueFamilyIndex = mainQueueIndex,
-              .image = upscaledFirstHitDepthImage,
-              .subresourceRange = vk::wholeColorSubresourceRange}});
+            {}, {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                  .oldLayout = inputFirstHitDepthImage->imageLayout(),
+                  .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .srcQueueFamilyIndex = mainQueueIndex,
+                  .dstQueueFamilyIndex = mainQueueIndex,
+                  .image = inputFirstHitDepthImage,
+                  .subresourceRange = vk::wholeColorSubresourceRange},
+                 {.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  .dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                  .oldLayout = upscaledFirstHitDepthImage->imageLayout(),
+                  .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .srcQueueFamilyIndex = mainQueueIndex,
+                  .dstQueueFamilyIndex = mainQueueIndex,
+                  .image = upscaledFirstHitDepthImage,
+                  .subresourceRange = vk::wholeColorSubresourceRange}});
 
         inputFirstHitDepthImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
         upscaledFirstHitDepthImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
@@ -460,6 +482,8 @@ void XessSrModuleContext::render() {
             module->renderHeight_,
             module->displayWidth_,
             module->displayHeight_,
+            worldUBO->cameraJitter.x,
+            worldUBO->cameraJitter.y,
         };
 
         worldCommandBuffer->bindDescriptorTable(depthDescriptorTable, VK_PIPELINE_BIND_POINT_COMPUTE)
@@ -472,28 +496,27 @@ void XessSrModuleContext::render() {
 
     auto dispatchUpscaledMotion = [&]() {
         worldCommandBuffer->barriersBufferImage(
-            {},
-            {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-              .oldLayout = inputMotionVectorImage->imageLayout(),
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcQueueFamilyIndex = mainQueueIndex,
-              .dstQueueFamilyIndex = mainQueueIndex,
-              .image = inputMotionVectorImage,
-              .subresourceRange = vk::wholeColorSubresourceRange},
-             {.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              .dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-              .oldLayout = upscaledMotionVectorImage->imageLayout(),
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcQueueFamilyIndex = mainQueueIndex,
-              .dstQueueFamilyIndex = mainQueueIndex,
-              .image = upscaledMotionVectorImage,
-              .subresourceRange = vk::wholeColorSubresourceRange}});
+            {}, {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                  .oldLayout = inputMotionVectorImage->imageLayout(),
+                  .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .srcQueueFamilyIndex = mainQueueIndex,
+                  .dstQueueFamilyIndex = mainQueueIndex,
+                  .image = inputMotionVectorImage,
+                  .subresourceRange = vk::wholeColorSubresourceRange},
+                 {.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  .dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                  .oldLayout = upscaledMotionVectorImage->imageLayout(),
+                  .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .srcQueueFamilyIndex = mainQueueIndex,
+                  .dstQueueFamilyIndex = mainQueueIndex,
+                  .image = upscaledMotionVectorImage,
+                  .subresourceRange = vk::wholeColorSubresourceRange}});
 
         inputMotionVectorImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
         upscaledMotionVectorImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
@@ -508,6 +531,8 @@ void XessSrModuleContext::render() {
             module->renderHeight_,
             module->displayWidth_,
             module->displayHeight_,
+            worldUBO->cameraJitter.x,
+            worldUBO->cameraJitter.y,
         };
 
         worldCommandBuffer->bindDescriptorTable(depthDescriptorTable, VK_PIPELINE_BIND_POINT_COMPUTE)
@@ -520,28 +545,27 @@ void XessSrModuleContext::render() {
 
     auto dispatchUpscaledNormalRoughness = [&]() {
         worldCommandBuffer->barriersBufferImage(
-            {},
-            {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-                                  VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-              .oldLayout = inputNormalRoughnessImage->imageLayout(),
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcQueueFamilyIndex = mainQueueIndex,
-              .dstQueueFamilyIndex = mainQueueIndex,
-              .image = inputNormalRoughnessImage,
-              .subresourceRange = vk::wholeColorSubresourceRange},
-             {.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-              .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-              .dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-              .oldLayout = upscaledNormalRoughnessImage->imageLayout(),
-              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-              .srcQueueFamilyIndex = mainQueueIndex,
-              .dstQueueFamilyIndex = mainQueueIndex,
-              .image = upscaledNormalRoughnessImage,
-              .subresourceRange = vk::wholeColorSubresourceRange}});
+            {}, {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
+                                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                  .oldLayout = inputNormalRoughnessImage->imageLayout(),
+                  .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .srcQueueFamilyIndex = mainQueueIndex,
+                  .dstQueueFamilyIndex = mainQueueIndex,
+                  .image = inputNormalRoughnessImage,
+                  .subresourceRange = vk::wholeColorSubresourceRange},
+                 {.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                  .dstAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                  .oldLayout = upscaledNormalRoughnessImage->imageLayout(),
+                  .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                  .srcQueueFamilyIndex = mainQueueIndex,
+                  .dstQueueFamilyIndex = mainQueueIndex,
+                  .image = upscaledNormalRoughnessImage,
+                  .subresourceRange = vk::wholeColorSubresourceRange}});
 
         inputNormalRoughnessImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
         upscaledNormalRoughnessImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
@@ -556,6 +580,8 @@ void XessSrModuleContext::render() {
             module->renderHeight_,
             module->displayWidth_,
             module->displayHeight_,
+            worldUBO->cameraJitter.x,
+            worldUBO->cameraJitter.y,
         };
 
         worldCommandBuffer->bindDescriptorTable(depthDescriptorTable, VK_PIPELINE_BIND_POINT_COMPUTE)
@@ -628,8 +654,6 @@ void XessSrModuleContext::render() {
         return;
     }
 
-    auto buffers = Renderer::instance().buffers();
-    auto worldUBO = static_cast<vk::Data::WorldUBO *>(buffers->worldUniformBuffer()->mappedPtr());
 
     worldCommandBuffer->barriersBufferImage(
         {}, {{.srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,

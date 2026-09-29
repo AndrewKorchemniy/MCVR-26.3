@@ -5,32 +5,28 @@
 #include "core/vulkan/render_pass.hpp"
 
 #include <iostream>
-
-std::ostream &framebufferCout() {
-    return std::cout << "[Framebuffer] ";
-}
+#include <utility>
 
 std::ostream &framebufferCerr() {
     return std::cerr << "[Framebuffer] ";
 }
 
-vk::Framebuffer::Framebuffer(std::shared_ptr<Device> device, VkFramebuffer framebuffer)
-    : device_(device), framebuffer_(framebuffer) {
-#ifdef DEBUG
-    framebufferCout() << "framebuffer created" << std::endl;
-#endif
+vk::Framebuffer::Framebuffer(std::shared_ptr<Device> device,
+                             VkFramebuffer framebuffer,
+                             std::vector<std::shared_ptr<Image>> attachments)
+    : device_(device), framebuffer_(framebuffer), attachments_(std::move(attachments)) {
 }
 
 vk::Framebuffer::~Framebuffer() {
     vkDestroyFramebuffer(device_->vkDevice(), framebuffer_, nullptr);
-
-#ifdef DEBUG
-    framebufferCout() << "framebuffer deconstructed" << std::endl;
-#endif
 }
 
 VkFramebuffer &vk::Framebuffer::vkFramebuffer() {
     return framebuffer_;
+}
+
+const std::vector<std::shared_ptr<vk::Image>> &vk::Framebuffer::attachments() const {
+    return attachments_;
 }
 
 vk::FramebufferBuilder::FramebufferAttachmentsBuilder::FramebufferAttachmentsBuilder(FramebufferBuilder &parent)
@@ -39,6 +35,7 @@ vk::FramebufferBuilder::FramebufferAttachmentsBuilder::FramebufferAttachmentsBui
 vk::FramebufferBuilder::FramebufferAttachmentsBuilder &
 vk::FramebufferBuilder::FramebufferAttachmentsBuilder::defineAttachment(std::shared_ptr<Image> image, int viewIndex) {
     attachments.push_back(image->vkImageView(viewIndex));
+    images.push_back(image);
 
     if (width == -1) {
         width = image->width();
@@ -88,7 +85,7 @@ std::shared_ptr<vk::Framebuffer> vk::FramebufferBuilder::build(std::shared_ptr<D
         exit(EXIT_FAILURE);
     }
 
-    return std::make_shared<Framebuffer>(device, framebuffer);
+    return std::make_shared<Framebuffer>(device, framebuffer, framebufferAttachmentsBuilder_.images);
 }
 
 std::shared_ptr<vk::Framebuffer> vk::FramebufferBuilder::build(std::shared_ptr<Device> device,

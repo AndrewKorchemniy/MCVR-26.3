@@ -5,7 +5,6 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-// Use Samplers but access via texelFetch
 layout(set = 0, binding = 0) uniform sampler2D denoisedGiSampler;
 layout(set = 0, binding = 11) uniform sampler2D diffuseAlbedoSampler;
 
@@ -16,11 +15,9 @@ void main() {
     ivec2 size = imageSize(modulatedGiImage);
     if (p.x >= size.x || p.y >= size.y) return;
 
-    // --- High performance texelFetch ---
     vec3 L = texelFetch(denoisedGiSampler, p, 0).rgb;
     vec3 A = texelFetch(diffuseAlbedoSampler, p, 0).rgb;
 
-    // Remodulate: Radiance = Lighting * Albedo
     vec3 C = L * A;
 
     if (any(isnan(C))) C = vec3(0.0);

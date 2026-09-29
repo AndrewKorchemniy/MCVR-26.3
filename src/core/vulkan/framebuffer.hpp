@@ -15,15 +15,19 @@ class Framebuffer : public SharedObject<Framebuffer> {
     friend FramebufferBuilder;
 
   public:
-    Framebuffer(std::shared_ptr<Device> device, VkFramebuffer framebuffer);
+    Framebuffer(std::shared_ptr<Device> device,
+                VkFramebuffer framebuffer,
+                std::vector<std::shared_ptr<Image>> attachments = {});
     ~Framebuffer();
 
     VkFramebuffer &vkFramebuffer();
+    const std::vector<std::shared_ptr<Image>> &attachments() const;
 
   private:
     std::shared_ptr<Device> device_;
 
     VkFramebuffer framebuffer_;
+    std::vector<std::shared_ptr<Image>> attachments_;
 };
 
 
@@ -32,6 +36,7 @@ class FramebufferBuilder {
     struct FramebufferAttachmentsBuilder {
         FramebufferBuilder &parent;
         std::vector<VkImageView> attachments;
+        std::vector<std::shared_ptr<Image>> images;
         uint32_t width = -1;
         uint32_t height = -1;
 
@@ -53,4 +58,4 @@ class FramebufferBuilder {
   private:
     FramebufferAttachmentsBuilder framebufferAttachmentsBuilder_;
 };
-}; // namespace vk
+};

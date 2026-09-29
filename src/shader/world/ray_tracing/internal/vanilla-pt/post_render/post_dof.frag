@@ -1,47 +1,47 @@
 #version 460
 
 #ifndef VPT_POST_ENABLE_DOF
-#define VPT_POST_ENABLE_DOF 0
+#    define VPT_POST_ENABLE_DOF 0
 #endif
 
 #ifndef VPT_POST_DOF_AUTO_FOCUS
-#define VPT_POST_DOF_AUTO_FOCUS 1
+#    define VPT_POST_DOF_AUTO_FOCUS 1
 #endif
 
 #ifndef VPT_POST_DOF_AUTO_FOCUS_RADIUS
-#define VPT_POST_DOF_AUTO_FOCUS_RADIUS 0.012
+#    define VPT_POST_DOF_AUTO_FOCUS_RADIUS 0.012
 #endif
 
 #ifndef VPT_POST_DOF_FOCUS_DISTANCE
-#define VPT_POST_DOF_FOCUS_DISTANCE 12.0
+#    define VPT_POST_DOF_FOCUS_DISTANCE 12.0
 #endif
 
 #ifndef VPT_POST_DOF_FOCUS_RANGE
-#define VPT_POST_DOF_FOCUS_RANGE 4.0
+#    define VPT_POST_DOF_FOCUS_RANGE 4.0
 #endif
 
 #ifndef VPT_POST_DOF_MAX_RADIUS
-#define VPT_POST_DOF_MAX_RADIUS 6.0
+#    define VPT_POST_DOF_MAX_RADIUS 6.0
 #endif
 
 #ifndef VPT_POST_DOF_SAMPLE_COUNT
-#define VPT_POST_DOF_SAMPLE_COUNT 24
+#    define VPT_POST_DOF_SAMPLE_COUNT 24
 #endif
 
 #ifndef VPT_POST_DOF_FOCUS_BINDING
-#define VPT_POST_DOF_FOCUS_BINDING 5
+#    define VPT_POST_DOF_FOCUS_BINDING 5
 #endif
 
 #ifndef VPT_POST_DOF_SOURCE_BINDING
-#define VPT_POST_DOF_SOURCE_BINDING 4
+#    define VPT_POST_DOF_SOURCE_BINDING 4
 #endif
 
 #ifndef VPT_POST_DOF_DIRECTION_X
-#define VPT_POST_DOF_DIRECTION_X 1.0
+#    define VPT_POST_DOF_DIRECTION_X 1.0
 #endif
 
 #ifndef VPT_POST_DOF_DIRECTION_Y
-#define VPT_POST_DOF_DIRECTION_Y 0.0
+#    define VPT_POST_DOF_DIRECTION_Y 0.0
 #endif
 
 layout(set = 3, binding = 1) uniform sampler2D postFirstHitDepth;
@@ -51,17 +51,15 @@ layout(set = 4, binding = VPT_POST_DOF_FOCUS_BINDING) uniform sampler2D postDofF
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 0) out vec4 outColor;
 
-const vec2 VPT_AUTO_FOCUS_OFFSETS[9] = vec2[](
-    vec2(0.0, 0.0),
-    vec2(0.0, -1.0),
-    vec2(1.0, 0.0),
-    vec2(0.0, 1.0),
-    vec2(-1.0, 0.0),
-    vec2(0.7071, -0.7071),
-    vec2(0.7071, 0.7071),
-    vec2(-0.7071, 0.7071),
-    vec2(-0.7071, -0.7071)
-);
+const vec2 VPT_AUTO_FOCUS_OFFSETS[9] = vec2[](vec2(0.0, 0.0),
+                                              vec2(0.0, -1.0),
+                                              vec2(1.0, 0.0),
+                                              vec2(0.0, 1.0),
+                                              vec2(-1.0, 0.0),
+                                              vec2(0.7071, -0.7071),
+                                              vec2(0.7071, 0.7071),
+                                              vec2(-0.7071, 0.7071),
+                                              vec2(-0.7071, -0.7071));
 
 vec2 clampUv(vec2 uv, vec2 texelSize) {
     return clamp(uv, texelSize * 0.5, vec2(1.0) - texelSize * 0.5);
@@ -84,9 +82,7 @@ void sortDepths(inout float depths[9], int count) {
 }
 
 void addValidDepth(inout float depths[9], inout int count, float depthValue) {
-    if (depthValue <= 0.0) {
-        return;
-    }
+    if (depthValue <= 0.0) { return; }
 
     depths[count] = depthValue;
     ++count;
@@ -103,9 +99,7 @@ float sampleStableDepth(vec2 uv, vec2 texelSize) {
     addValidDepth(depths, count, sampleRawDepth(clampUv(uv + vec2(0.0, texelSize.y), texelSize)));
     addValidDepth(depths, count, sampleRawDepth(clampUv(uv - vec2(0.0, texelSize.y), texelSize)));
 
-    if (count == 0) {
-        return sampleRawDepth(uv);
-    }
+    if (count == 0) { return sampleRawDepth(uv); }
 
     sortDepths(depths, count);
 
@@ -162,7 +156,7 @@ void main() {
     return;
 #else
     float focusDistance = VPT_POST_DOF_FOCUS_DISTANCE;
-#if VPT_POST_DOF_AUTO_FOCUS != 0
+#    if VPT_POST_DOF_AUTO_FOCUS != 0
     float temporalFocus = texture(postDofFocus, vec2(0.5)).r;
     if (temporalFocus > 0.0 && temporalFocus < 100000.0) {
         focusDistance = temporalFocus;
@@ -175,9 +169,7 @@ void main() {
         for (int i = 0; i < 9; ++i) {
             vec2 uv = clampUv(vec2(0.5) + VPT_AUTO_FOCUS_OFFSETS[i] * autoFocusSampleRadius, texelSize);
             float depthValue = sampleRawDepth(uv);
-            if (depthValue <= 0.0) {
-                continue;
-            }
+            if (depthValue <= 0.0) { continue; }
 
             autoFocusDepths[validAutoFocusDepthCount] = depthValue;
             ++validAutoFocusDepthCount;
@@ -203,15 +195,13 @@ void main() {
                 bandDepth = sum / max(count, 1);
             }
 
-            if (autoFocusCenterDepth <= 0.0) {
-                autoFocusCenterDepth = medianDepth;
-            }
+            if (autoFocusCenterDepth <= 0.0) { autoFocusCenterDepth = medianDepth; }
 
             float farBlend = smoothstep(16.0, 96.0, max(autoFocusCenterDepth, bandDepth));
             focusDistance = mix(autoFocusCenterDepth, bandDepth, farBlend);
         }
     }
-#endif
+#    endif
 
     vec2 blurAxis = vec2(VPT_POST_DOF_DIRECTION_X, VPT_POST_DOF_DIRECTION_Y);
     float axisLength = length(blurAxis);
@@ -253,24 +243,21 @@ void main() {
             float depthTolerance = max(0.45, min(centerDepth, focusDistance) * 0.028 + focusRange * 0.18);
             float depthDelta = sampleDepth - centerDepth;
             float farDepthDelta = max(depthDelta, 0.0);
-            float farOcclusionBase =
-                1.0 - smoothstep(depthTolerance * 0.9, depthTolerance * 6.0, farDepthDelta);
-            float deepBleed =
-                smoothstep(depthTolerance * 0.35, depthTolerance * 4.5, farDepthDelta) *
-                smoothstep(0.12, 0.75, normalizedBlur);
+            float farOcclusionBase = 1.0 - smoothstep(depthTolerance * 0.9, depthTolerance * 6.0, farDepthDelta);
+            float deepBleed = smoothstep(depthTolerance * 0.35, depthTolerance * 4.5, farDepthDelta) *
+                              smoothstep(0.12, 0.75, normalizedBlur);
             float farOcclusionWeight = mix(farOcclusionBase, 1.0, 0.32 * deepBleed);
             float nearCoverage = smoothstep(tapDistance - 1.4, tapDistance + 1.4, sampleRadius + 0.45);
             float nearOcclusionWeight = mix(0.28, 1.0, nearCoverage);
             float depthWeight = sampleDepth < centerDepth ? nearOcclusionWeight : farOcclusionWeight;
-            float edgeContinuity =
-                1.0 - smoothstep(depthTolerance * 1.8, depthTolerance * 7.5, abs(depthDelta));
+            float edgeContinuity = 1.0 - smoothstep(depthTolerance * 1.8, depthTolerance * 7.5, abs(depthDelta));
             float cocTolerance = mix(0.75, 2.5, normalizedBlur);
             float cocWeight = 1.0 - smoothstep(cocTolerance, cocTolerance * 2.8, abs(sampleCoC - centerCoC));
             float sideWeight = sampleCoC * centerCoC < -0.001 ? 0.3 : 1.0;
             float coverageWeight =
                 smoothstep(tapDistance - 1.35, tapDistance + 1.7, max(sampleRadius, blurRadius) + 0.55);
-            float weight = baseWeight * depthWeight * mix(0.7, 1.0, edgeContinuity) *
-                           mix(0.4, 1.0, cocWeight) * sideWeight * mix(0.45, 1.0, coverageWeight);
+            float weight = baseWeight * depthWeight * mix(0.7, 1.0, edgeContinuity) * mix(0.4, 1.0, cocWeight) *
+                           sideWeight * mix(0.45, 1.0, coverageWeight);
 
             accum += sampleColor * weight;
             weightSum += weight;

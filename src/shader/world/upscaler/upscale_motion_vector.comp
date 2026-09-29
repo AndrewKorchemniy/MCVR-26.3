@@ -12,7 +12,9 @@ layout(push_constant) uniform MotionParams {
     uint srcHeight;
     uint dstWidth;
     uint dstHeight;
-} params;
+    vec2 jitter;
+}
+params;
 
 vec2 loadMotion(ivec2 coord) {
     coord = clamp(coord, ivec2(0), ivec2(int(params.srcWidth) - 1, int(params.srcHeight) - 1));
@@ -37,12 +39,10 @@ vec2 sampleBilinear(vec2 srcPixel) {
 
 void main() {
     uvec2 coord = gl_GlobalInvocationID.xy;
-    if (coord.x >= params.dstWidth || coord.y >= params.dstHeight) {
-        return;
-    }
+    if (coord.x >= params.dstWidth || coord.y >= params.dstHeight) { return; }
 
     vec2 uv = (vec2(coord) + 0.5) / vec2(params.dstWidth, params.dstHeight);
-    vec2 srcPixel = uv * vec2(params.srcWidth, params.srcHeight);
+    vec2 srcPixel = uv * vec2(params.srcWidth, params.srcHeight) - params.jitter;
     vec2 motion = sampleBilinear(srcPixel);
     motion *= vec2(params.scaleX, params.scaleY);
 

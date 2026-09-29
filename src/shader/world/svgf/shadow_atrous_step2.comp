@@ -5,7 +5,7 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;   // R: visibility, G: hitDist, B: NoL
+layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;
 layout(set = 0, binding = 1, rgba16f) uniform image2D shadowOutputImage;
 layout(set = 0, binding = 2, r32f) uniform image2D linearDepthImage;
 layout(set = 0, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
@@ -20,17 +20,14 @@ vec3 normalizeSafe(vec3 v) {
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(shadowInputImage);
-    if (pixel.x >= size.x || pixel.y >= size.y) {
-        return;
-    }
+    if (pixel.x >= size.x || pixel.y >= size.y) { return; }
 
     vec4 center = imageLoad(shadowInputImage, pixel);
     float centerVis = center.x;
     float centerHit = center.y;
     float centerNoL = clamp(center.z, 0.0, 1.0);
     float centerA = center.w;
-    
-    
+
     float centerDepth = imageLoad(linearDepthImage, pixel).r;
     vec3 centerNormal = normalizeSafe(imageLoad(normalRoughnessImage, pixel).xyz);
 
@@ -90,11 +87,7 @@ void main() {
             wDepth = mix(wDepth, 1.0, relax);
             wNormal = mix(wNormal, 1.0, relax);
 
-            float w = wDepth
-                    * wNormal
-                    * exp(-shadowDiff / phiShadow)
-                    * exp(-hitDiff / phiHit)
-                    * exp(-nolDiff / phiNoL);
+            float w = wDepth * wNormal * exp(-shadowDiff / phiShadow) * exp(-hitDiff / phiHit) * exp(-nolDiff / phiNoL);
 
             float dist2 = float(dx * dx + dy * dy);
             w *= exp(-dist2 / (2.0 * sigma * sigma));

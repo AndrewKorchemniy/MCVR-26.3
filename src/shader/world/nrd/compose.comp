@@ -3,45 +3,218 @@
 
 #define NRD_GLSL 1
 #include "../../../extern/nrd/Shaders/Include/NRD.hlsli"
+#include "color_space.glsl"
+#include "nrd_resolve_material.glsl"
 #include "common/shared.hpp"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba8) uniform readonly image2D diffuseAlbedoMetallicImage;
-layout(set = 0, binding = 1, rgba8) uniform readonly image2D specularAlbedoImage;
-layout(set = 0, binding = 2, rgba16f) uniform readonly image2D normalRoughnessImage;
-layout(set = 0, binding = 3, r16f) uniform readonly image2D linearDepthImage;
-layout(set = 0, binding = 4, rgba16f) uniform readonly image2D clearRadianceImage;
-layout(set = 0, binding = 5, rgba16f) uniform readonly image2D baseEmissionImage;
-layout(set = 0, binding = 6, rgba16f) uniform readonly image2D refractionRadianceImage;
-layout(set = 0, binding = 7, rg16f) uniform readonly image2D motionVectorImage;
-layout(set = 0, binding = 8, rgba16f) uniform readonly image2D fogImage;
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D sharedDiffuseAlbedoMetallicImage;
+layout(set = 0, binding = 1, rgba8) uniform readonly image2D sharedSpecularAlbedoImage;
+layout(set = 0, binding = 2, rgba16f) uniform readonly image2D indirectGuideNormalRoughnessImage;
+layout(set = 0, binding = 3, r16f) uniform readonly image2D indirectGuideDepthImage;
+layout(set = 0, binding = 4, rgba16f) uniform readonly image2D composeClearRadianceImage;
+layout(set = 0, binding = 5, rgba16f) uniform readonly image2D composeBaseEmissionImage;
+layout(set = 0, binding = 6, rgba16f) uniform readonly image2D directLightGuideNormalRoughnessImage;
+layout(set = 0, binding = 7, rgba16f) uniform readonly image2D directLightGuideMotionDepthImage;
+layout(set = 0, binding = 8, rgba16f) uniform readonly image2D composeFogImage;
 
-layout(set = 1, binding = 0, rgba16f) uniform readonly image2D denoisedDiffuseRadianceImage;
-layout(set = 1, binding = 1, rgba16f) uniform readonly image2D denoisedSpecularRadianceImage;
-layout(set = 1, binding = 2, rgba16f) uniform writeonly image2D denoisedRadianceImage;
-layout(set = 1, binding = 3, rgba16f) uniform readonly image2D refractionHistoryRadianceImagePrev;
-layout(set = 1, binding = 4, r16f) uniform readonly image2D refractionHistoryDepthImagePrev;
-layout(set = 1, binding = 5, rgba16f) uniform writeonly image2D refractionHistoryRadianceImage;
-layout(set = 1, binding = 6, r16f) uniform writeonly image2D refractionHistoryDepthImage;
 
-layout(set = 2, binding = 0) uniform WorldUniform {
-    WorldUBO worldUBO;
-};
-layout(set = 2, binding = 1) uniform SkyUniform {
+layout(set = 1, binding = 0, rgba16f) uniform readonly image2D denoisedIndirectDiffuseRadianceImage;
+layout(set = 1, binding = 1, rgba16f) uniform readonly image2D denoisedIndirectSpecularRadianceImage;
+layout(set = 1, binding = 2, rgba16f) uniform readonly image2D denoisedIndirectDiffuseSh0Image;
+layout(set = 1, binding = 3, rgba16f) uniform readonly image2D denoisedIndirectDiffuseSh1Image;
+layout(set = 1, binding = 4, rgba16f) uniform readonly image2D denoisedIndirectSpecularSh0Image;
+layout(set = 1, binding = 5, rgba16f) uniform readonly image2D denoisedIndirectSpecularSh1Image;
+layout(set = 1, binding = 6) uniform writeonly image2D denoisedRadianceImage;
+layout(set = 1, binding = 7, rgba16f) uniform readonly image2D denoisedDirectDiffuseRadianceImage;
+layout(set = 1, binding = 8, rgba16f) uniform readonly image2D denoisedDirectSpecularRadianceImage;
+layout(set = 0, binding = 9, r16f) uniform readonly image2D directDenoisingDepthImage;
+layout(set = 1, binding = 9, rgb10_a2) uniform readonly image2D sdkNormalRoughnessImage;
+#if MCVR_NRD_HALF_RATE_RESOLVE
+layout(set = 1, binding = 10) uniform writeonly image2D temporalIndirectImage;
+layout(set = 1, binding = 11, rgba16f) uniform readonly image2D sdkDiffuseMotionVectorImage;
+layout(set = 1, binding = 12, rgba16f) uniform writeonly image2D secondaryRadianceImage;
+#endif
+
+layout(set = 2, binding = 0) uniform SkyUniform {
     SkyUBO skyUBO;
 };
+layout(set = 2, binding = 1) uniform WorldUniform {
+    WorldUBO worldUBO;
+};
 
-const float kMinDiffuseAlbedo = 0.05;
-const float kMinSpecularAlbedo = 0.04;
-const vec3 kUnderwaterColor = vec3(0.0, 0.48, 0.65);
+layout(push_constant) uniform NrdMode {
+    uint shEnabled;
+    uint separateDirectEnabled;
+    uint frameIndex;
+    uint nrdMode;
+}
+nrdMode;
 
-vec3 remodulateDiffuse(vec3 radiance, vec3 albedo) {
-    return radiance * max(albedo, vec3(kMinDiffuseAlbedo));
+const float minDiffuseAlbedo = 0.05;
+const float maxComposeRadiance = 65504.0;
+const vec3 underwaterColor = vec3(0.0, 0.48, 0.65);
+
+const float NRD_HALF_RATE_TRANSPARENT_DIFFUSE_RETENTION = 0.15;
+const float NRD_HALF_RATE_LOW_ROUGHNESS_DIFFUSE_SCALE = 1.10;
+const float NRD_HALF_RATE_LOW_ROUGHNESS_SPECULAR_SCALE = 1.50;
+
+vec3 sanitizeComposeRadiance(vec3 radiance) {
+    if (any(isnan(radiance)) || any(isinf(radiance))) { return vec3(0.0); }
+    return clamp(radiance, vec3(0.0), vec3(maxComposeRadiance));
 }
 
-vec3 remodulateSpecular(vec3 radiance, vec3 albedo) {
-    return radiance * max(albedo, vec3(kMinSpecularAlbedo));
+vec3 remodulateDiffuse(vec3 radiance, vec3 albedo) {
+    return radiance * max(albedo, vec3(minDiffuseAlbedo));
+}
+
+vec3 applyFogCompose(vec3 radiance, vec4 fogData) {
+    bool useFogCompose = fogData.a >= 0.0;
+    float fogTransmittance = useFogCompose ? clamp(fogData.a, 0.0, 1.0) : 1.0;
+    vec3 fogAdditive = useFogCompose ? sanitizeComposeRadiance(fogData.rgb) : vec3(0.0);
+    return sanitizeComposeRadiance(sanitizeComposeRadiance(radiance) * fogTransmittance + fogAdditive);
+}
+
+bool isFiniteComposeFloat(float value) {
+    return !isnan(value) && !isinf(value);
+}
+
+bool isFiniteComposeVec3(vec3 value) {
+    return !any(isnan(value)) && !any(isinf(value));
+}
+
+vec3 normalizeComposeSafe(vec3 value, vec3 fallback) {
+    float lengthSquared = dot(value, value);
+    if (!isFiniteComposeVec3(value) || !isFiniteComposeFloat(lengthSquared) || lengthSquared <= 1e-8) {
+        return fallback;
+    }
+    return value * inversesqrt(lengthSquared);
+}
+
+vec3 loadComposeNormal(ivec2 pixel) {
+    ivec2 size = imageSize(indirectGuideNormalRoughnessImage);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return normalizeComposeSafe(imageLoad(indirectGuideNormalRoughnessImage, clampedPixel).xyz, vec3(0.0, 1.0, 0.0));
+}
+
+float loadComposeViewZ(ivec2 pixel) {
+    ivec2 size = imageSize(indirectGuideDepthImage);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    float viewZ = imageLoad(indirectGuideDepthImage, clampedPixel).r;
+    return isFiniteComposeFloat(viewZ) ? max(viewZ, 0.0) : 65504.0;
+}
+
+ivec2 indirectSignalPixel(ivec2 pixel) {
+    return pixel;
+}
+
+vec3 reconstructWorldViewDirection(ivec2 pixel, ivec2 resolution) {
+    vec2 pixelCenter = vec2(pixel) + vec2(0.5) + worldUBO.cameraJitter;
+    vec2 ndc = pixelCenter / vec2(resolution) * 2.0 - 1.0;
+    vec4 viewNear = worldUBO.cameraProjMatInv * vec4(ndc, 0.0, 1.0);
+    if (!isFiniteComposeFloat(viewNear.w) || abs(viewNear.w) <= 1e-8) { return vec3(0.0, 0.0, 1.0); }
+    viewNear /= viewNear.w;
+    vec3 cameraRay = vec3(worldUBO.cameraEffectedViewMatInv * vec4(viewNear.xyz, 0.0));
+    return normalizeComposeSafe(-cameraRay, vec3(0.0, 0.0, 1.0));
+}
+
+vec3 composeSpecularMaterialFactor(ivec2 pixel, ivec2 resolution, vec3 normal, float roughness, vec4 specularMaterial) {
+    if (specularMaterial.a > 0.5) { return vec3(1.0); }
+
+    vec3 reflectionF0 = clamp(specularMaterial.rgb, vec3(0.0), vec3(1.0));
+    vec3 viewDirection = reconstructWorldViewDirection(pixel, resolution);
+    if (nrdMode.nrdMode != 2u) {
+        vec3 diffuseFactor;
+        vec3 specularFactor;
+        vec3 diffuseAlbedo = clamp(imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb, vec3(0.0), vec3(1.0));
+        NRD_MaterialFactors(normal, viewDirection, diffuseAlbedo, reflectionF0, clamp(roughness, 0.0, 1.0),
+                            diffuseFactor, specularFactor);
+        return max(specularFactor, vec3(1e-3));
+    }
+
+    precise float noV = abs(dot(normal, viewDirection));
+    precise float m = clamp(roughness * roughness, 0.0, 1.0);
+    precise vec4 x = vec4(1, noV, noV * noV, noV * noV * noV);
+    precise vec4 y = vec4(1, m, m * m, m * m * m);
+    precise float bias =
+        dot(vec2(.99044 * x.x - 1.28514 * x.y, 1.29678 * x.x - .755907 * x.y), y.xy) /
+        max(dot(vec3(x.x + 2.92338 * x.y + 59.4188 * x.w, 20.3225 * x.x - 27.0302 * x.y + 222.592 * x.w,
+                     121.563 * x.x + 626.13 * x.y + 316.627 * x.w),
+                y.xyw),
+            1e-6);
+    precise float scale =
+        dot(vec2(.0365463 * x.x + 3.32707 * x.y, 9.0632 * x.x - 9.04756 * x.y), y.xy) /
+        max(dot(vec3(x.x + 3.59685 * x.z - 1.36772 * x.w, 9.04401 * x.x - 16.3174 * x.z + 9.22949 * x.w,
+                     5.56589 * x.x + 19.7886 * x.z - 20.2123 * x.w),
+                y.xyw),
+            1e-6);
+    vec3 environment = clamp(reflectionF0 * scale + vec3(bias), vec3(0), vec3(1));
+    environment *= mix(.1, 1.0, clamp(roughness, 0, 1));
+    return mix(vec3(.02), vec3(1), environment);
+}
+
+void loadComposeDirectGuide(
+    ivec2 pixel, vec3 fallbackNormal, float fallbackRoughness, out vec3 normal, out float roughness) {
+    vec4 directNormalRoughness = imageLoad(directLightGuideNormalRoughnessImage, pixel);
+    vec4 directMotionDepth = imageLoad(directLightGuideMotionDepthImage, pixel);
+    float normalLengthSquared = dot(directNormalRoughness.xyz, directNormalRoughness.xyz);
+    bool valid = isFiniteComposeVec3(directNormalRoughness.xyz) && isFiniteComposeFloat(directNormalRoughness.w) &&
+                 !any(isnan(directMotionDepth)) && !any(isinf(directMotionDepth)) && directMotionDepth.z > 0.0 &&
+                 directMotionDepth.z < 65504.0 * 0.9 && directMotionDepth.w > 0.0 &&
+                 directMotionDepth.w < 65504.0 * 0.9 && normalLengthSquared > 1e-8;
+    normal = valid ? directNormalRoughness.xyz * inversesqrt(normalLengthSquared) : fallbackNormal;
+    float directRoughness = directNormalRoughness.w;
+    if (nrdMode.nrdMode != 2u) directRoughness -= directRoughness > 1.5 ? 2.0 : 0.0;
+    roughness = valid ? clamp(directRoughness, 0.0, 1.0) : fallbackRoughness;
+}
+
+void resolveShRadiance(
+    ivec2 pixel, ivec2 indirectPixel, ivec2 resolution, out vec3 diffuseRadiance, out vec3 specularRadiance) {
+    NRD_SG diffuseSg = REBLUR_BackEnd_UnpackSh(imageLoad(denoisedIndirectDiffuseSh0Image, indirectPixel),
+                                               imageLoad(denoisedIndirectDiffuseSh1Image, indirectPixel));
+    NRD_SG specularSg = REBLUR_BackEnd_UnpackSh(imageLoad(denoisedIndirectSpecularSh0Image, indirectPixel),
+                                                imageLoad(denoisedIndirectSpecularSh1Image, indirectPixel));
+
+    vec4 normalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    vec3 normal = normalizeComposeSafe(normalRoughness.xyz, vec3(0.0, 1.0, 0.0));
+    float roughness = clamp(normalRoughness.w, 0.0, 1.0);
+    float roughnessAA = NRD_SG_ExtractRoughnessAA(specularSg);
+    if (isFiniteComposeFloat(roughnessAA) && roughnessAA > 0.0) { roughness = clamp(roughnessAA, 0.0, 1.0); }
+
+    vec3 viewDirection = reconstructWorldViewDirection(pixel, resolution);
+    diffuseRadiance = NRD_SG_ResolveDiffuse(diffuseSg, normal);
+    specularRadiance = NRD_SG_ResolveSpecular(specularSg, normal, viewDirection, roughness);
+
+    vec2 rejitterScale = vec2(1.0);
+    if (pixel.x > 0 && pixel.y > 0 && pixel.x + 1 < resolution.x && pixel.y + 1 < resolution.y) {
+        float viewZ = loadComposeViewZ(pixel);
+        vec3 normalEast = loadComposeNormal(pixel + ivec2(1, 0));
+        vec3 normalWest = loadComposeNormal(pixel + ivec2(-1, 0));
+        vec3 normalNorth = loadComposeNormal(pixel + ivec2(0, 1));
+        vec3 normalSouth = loadComposeNormal(pixel + ivec2(0, -1));
+        float viewZEast = loadComposeViewZ(pixel + ivec2(1, 0));
+        float viewZWest = loadComposeViewZ(pixel + ivec2(-1, 0));
+        float viewZNorth = loadComposeViewZ(pixel + ivec2(0, 1));
+        float viewZSouth = loadComposeViewZ(pixel + ivec2(0, -1));
+        vec4 specularMaterial = imageLoad(sharedSpecularAlbedoImage, pixel);
+        vec3 specularF0 = specularMaterial.a > 0.5 ? vec3(1.0) : max(specularMaterial.rgb, vec3(0.0));
+        rejitterScale =
+            NRD_SG_ReJitter(diffuseSg, specularSg, specularF0, viewDirection, roughness, viewZ, viewZEast, viewZWest,
+                            viewZNorth, viewZSouth, normal, normalEast, normalWest, normalNorth, normalSouth);
+    }
+#if MCVR_NRD_HALF_RATE_RESOLVE
+    bool smoothTransmission =
+        nrdMode.nrdMode == 2u && imageLoad(sharedSpecularAlbedoImage, pixel).a > 0.5 && normalRoughness.w < 0.12;
+
+    diffuseRadiance = smoothTransmission ? NRD_SG_ExtractColor(diffuseSg) : diffuseRadiance * rejitterScale.x;
+#else
+    diffuseRadiance *= rejitterScale.x;
+#endif
+    specularRadiance *= rejitterScale.y;
+
+    diffuseRadiance = isFiniteComposeVec3(diffuseRadiance) ? max(diffuseRadiance, vec3(0.0)) : vec3(0.0);
+    specularRadiance = isFiniteComposeVec3(specularRadiance) ? max(specularRadiance, vec3(0.0)) : vec3(0.0);
 }
 
 void main() {
@@ -49,34 +222,136 @@ void main() {
     ivec2 size = imageSize(denoisedRadianceImage);
     if (pixel.x >= size.x || pixel.y >= size.y) return;
 
-    vec4 diffData = imageLoad(denoisedDiffuseRadianceImage, pixel);
-    vec4 specData = imageLoad(denoisedSpecularRadianceImage, pixel);
-    vec3 diffRadiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(diffData).rgb;
-    vec3 specRadiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(specData).rgb;
+    vec3 diffRadiance;
+    vec3 specRadiance;
+    ivec2 indirectPixel = indirectSignalPixel(pixel);
+    bool hasIndirectSignal = all(greaterThanEqual(indirectPixel, ivec2(0)));
+    if (!hasIndirectSignal) {
+        diffRadiance = vec3(0.0);
+        specRadiance = vec3(0.0);
+    } else if (nrdMode.shEnabled != 0u) {
+        resolveShRadiance(pixel, indirectPixel, size, diffRadiance, specRadiance);
+    } else {
+        vec4 diffData = imageLoad(denoisedIndirectDiffuseRadianceImage, indirectPixel);
+        vec4 specData = imageLoad(denoisedIndirectSpecularRadianceImage, indirectPixel);
+        if (nrdMode.nrdMode == 2u) {
+            float roughness = abs(imageLoad(sdkNormalRoughnessImage, pixel).z * 2.0 - 1.0);
+            float diffuseScale = 1.0, specularScale = 1.0;
+            if (imageLoad(sharedSpecularAlbedoImage, pixel).a > 0.5)
+#if MCVR_NRD_HALF_RATE_RESOLVE
+                diffuseScale = imageLoad(indirectGuideNormalRoughnessImage, pixel).w < 0.12 ?
+                                   1.0 :
+                                   NRD_HALF_RATE_TRANSPARENT_DIFFUSE_RETENTION;
+#else
+                diffuseScale = NRD_HALF_RATE_TRANSPARENT_DIFFUSE_RETENTION;
+#endif
+            else if (roughness <= 0.10) {
+                diffuseScale = NRD_HALF_RATE_LOW_ROUGHNESS_DIFFUSE_SCALE;
+                specularScale = NRD_HALF_RATE_LOW_ROUGHNESS_SPECULAR_SCALE;
+            }
 
-    vec3 diffAlbedo = imageLoad(diffuseAlbedoMetallicImage, pixel).rgb;
-    vec3 specAlbedo = imageLoad(specularAlbedoImage, pixel).rgb;
+            diffData.rgb = roundToFloat16(diffData.rgb * diffuseScale);
+            specData.rgb = roundToFloat16(specData.rgb * specularScale);
+        }
+        diffRadiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(diffData).rgb;
+        specRadiance = REBLUR_BackEnd_UnpackRadianceAndNormHitDist(specData).rgb;
+    }
+
+    vec3 directDiffuseRadiance = vec3(0.0);
+    vec3 directSpecularRadiance = vec3(0.0);
+    if (nrdMode.separateDirectEnabled != 0u &&
+        (nrdMode.nrdMode != 2u || imageLoad(directDenoisingDepthImage, pixel).r < 58953.0)) {
+        directDiffuseRadiance = imageLoad(denoisedDirectDiffuseRadianceImage, pixel).rgb;
+        directSpecularRadiance = imageLoad(denoisedDirectSpecularRadianceImage, pixel).rgb;
+    }
+    diffRadiance = sanitizeComposeRadiance(diffRadiance);
+    specRadiance = sanitizeComposeRadiance(specRadiance);
+    directDiffuseRadiance = sanitizeComposeRadiance(directDiffuseRadiance);
+    directSpecularRadiance = sanitizeComposeRadiance(directSpecularRadiance);
+
+    vec3 diffAlbedo = imageLoad(sharedDiffuseAlbedoMetallicImage, pixel).rgb;
+    vec4 specularMaterial = imageLoad(sharedSpecularAlbedoImage, pixel);
+    vec4 indirectNormalRoughness = imageLoad(indirectGuideNormalRoughnessImage, pixel);
+    vec3 indirectNormal = normalizeComposeSafe(indirectNormalRoughness.xyz, vec3(0.0, 1.0, 0.0));
+    float indirectRoughness = clamp(indirectNormalRoughness.w, 0.0, 1.0);
+    vec3 indirectSpecularFactor =
+        composeSpecularMaterialFactor(pixel, size, indirectNormal, indirectRoughness, specularMaterial);
+
+    if (nrdMode.nrdMode == 2u && nrdMode.shEnabled != 0u) {
+        if (specularMaterial.a > 0.5) {
+#if MCVR_NRD_HALF_RATE_RESOLVE
+            diffRadiance *= indirectRoughness < 0.12 ? 1.0 : NRD_HALF_RATE_TRANSPARENT_DIFFUSE_RETENTION;
+#else
+            diffRadiance *= NRD_HALF_RATE_TRANSPARENT_DIFFUSE_RETENTION;
+#endif
+        } else if (indirectRoughness <= 0.10) {
+            diffRadiance *= NRD_HALF_RATE_LOW_ROUGHNESS_DIFFUSE_SCALE;
+            specRadiance *= NRD_HALF_RATE_LOW_ROUGHNESS_SPECULAR_SCALE;
+        }
+    }
+#if MCVR_NRD_HALF_RATE_RESOLVE
+    bool smoothTransmission = nrdMode.nrdMode == 2u && specularMaterial.a > 0.5 && indirectRoughness < 0.12;
+    bool finiteTransmission = smoothTransmission && imageLoad(sdkDiffuseMotionVectorImage, pixel).w > 0.5;
+    if (!smoothTransmission || finiteTransmission) diffRadiance = remodulateDiffuse(diffRadiance, diffAlbedo);
+    vec3 transmissionDiffuse = diffRadiance;
+#else
     diffRadiance = remodulateDiffuse(diffRadiance, diffAlbedo);
-    specRadiance = remodulateSpecular(specRadiance, specAlbedo);
+#endif
+    specRadiance *= indirectSpecularFactor;
+    if (nrdMode.separateDirectEnabled != 0u) {
+        directDiffuseRadiance = remodulateDiffuse(directDiffuseRadiance, diffAlbedo);
+        if (any(greaterThan(directSpecularRadiance, vec3(0)))) {
+            vec3 directNormal;
+            float directRoughness;
+            loadComposeDirectGuide(pixel, indirectNormal, indirectRoughness, directNormal, directRoughness);
+            vec3 directSpecularFactor = indirectSpecularFactor;
+            if (any(notEqual(directNormal, indirectNormal)) || directRoughness != indirectRoughness)
+                directSpecularFactor = composeSpecularMaterialFactor(pixel, size, directNormal, directRoughness, specularMaterial);
+            directSpecularRadiance *= directSpecularFactor;
+        }
+    }
 
-    vec4 clear = imageLoad(clearRadianceImage, pixel);
+    vec4 clear = imageLoad(composeClearRadianceImage, pixel);
     vec3 clearRadiance = clear.rgb * clear.a;
-    vec4 emission = imageLoad(baseEmissionImage, pixel);
-    vec3 emissionRadiance = emission.rgb * emission.a;
-    vec4 fogData = imageLoad(fogImage, pixel);
+    vec4 emission = imageLoad(composeBaseEmissionImage, pixel);
+    vec3 emissionRadiance = isFiniteComposeVec3(emission.rgb) ? max(emission.rgb, vec3(0.0)) : vec3(0.0);
+    vec4 fogData = imageLoad(composeFogImage, pixel);
     bool useFogCompose = fogData.a >= 0.0;
-    float fogTransmittance = useFogCompose ? clamp(fogData.a, 0.0, 1.0) : 1.0;
-    vec3 fogAdditive = useFogCompose ? fogData.rgb : vec3(0.0);
 
     vec3 result;
     if (clear.a > 0.0) {
-        result = clearRadiance;
+        result = applyFogCompose(clearRadiance, fogData);
     } else {
-        vec3 baseRadiance = diffRadiance + specRadiance + emissionRadiance;
-        if (useFogCompose && skyUBO.cameraSubmersionType == 1) {
-            baseRadiance *= kUnderwaterColor;
-        }
-        result = baseRadiance * fogTransmittance + fogAdditive;
+        vec3 baseRadiance =
+            diffRadiance + specRadiance + directDiffuseRadiance + directSpecularRadiance + emissionRadiance;
+        if (useFogCompose && skyUBO.cameraSubmersionType == 1) { baseRadiance *= underwaterColor; }
+        result = applyFogCompose(baseRadiance, fogData);
     }
-    imageStore(denoisedRadianceImage, pixel, vec4(max(result, 0.0), 1.0));
+    float historyEligible = 1.0;
+#if MCVR_NRD_HALF_RATE_RESOLVE
+    historyEligible = float(clear.a <= 0.0 && indirectRoughness >= .5 &&
+        !any(greaterThan(emissionRadiance, vec3(0))));
+#endif
+    imageStore(denoisedRadianceImage, pixel, vec4(sanitizeComposeRadiance(result), historyEligible));
+#if MCVR_NRD_HALF_RATE_RESOLVE
+    {
+        bool diffuseIllumination = usesDiffuseIlluminationHistory(
+            imageLoad(sdkNormalRoughnessImage, pixel), imageLoad(sharedDiffuseAlbedoMetallicImage, pixel),
+            imageLoad(sdkDiffuseMotionVectorImage, pixel).w);
+        vec3 indirect = clear.a > 0.0 ? vec3(0.0) : diffRadiance + (diffuseIllumination ? vec3(0.0) : specRadiance);
+
+
+
+        if (clear.a <= 0.0 && smoothTransmission) indirect = specRadiance;
+        if (useFogCompose && skyUBO.cameraSubmersionType == 1) indirect *= underwaterColor;
+        float transmittance = clear.a > 0.0 ? 0.0 : (useFogCompose ? clamp(fogData.a, 0.0, 1.0) : 1.0);
+        imageStore(temporalIndirectImage, pixel, vec4(sanitizeComposeRadiance(indirect), transmittance));
+        vec3 secondary = diffuseIllumination ? specRadiance : transmissionDiffuse;
+        if (useFogCompose && skyUBO.cameraSubmersionType == 1) secondary *= underwaterColor;
+        if (clear.a > 0.0) secondary = vec3(0.0);
+        imageStore(secondaryRadianceImage, pixel,
+                   vec4(sanitizeComposeRadiance(secondary),
+                        clear.a <= 0.0 && (diffuseIllumination || smoothTransmission) ? transmittance : -1.0));
+    }
+#endif
 }

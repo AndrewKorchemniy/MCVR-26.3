@@ -45,11 +45,11 @@ class ShaderSpirvCache {
 
     static std::filesystem::path makeCanonical(const std::filesystem::path &path);
 
-    static std::optional<uint64_t> computeFileDependencyHash(
-        const std::filesystem::path &shaderPath,
-        const std::vector<std::string> &includeDirectories,
-        std::unordered_map<std::string, std::optional<uint64_t>> &hashCache,
-        std::unordered_set<std::string> &visitingPaths);
+    static std::optional<uint64_t>
+    computeFileDependencyHash(const std::filesystem::path &shaderPath,
+                              const std::vector<std::string> &includeDirectories,
+                              std::unordered_map<std::string, std::optional<uint64_t>> &hashCache,
+                              std::unordered_set<std::string> &visitingPaths);
 
     static void trimCacheDirectory(const std::filesystem::path &cacheDir, size_t maxFiles = 500);
 };
@@ -81,9 +81,13 @@ class Shader : public SharedObject<Shader> {
         bool cacheReadFailed = false;
         std::string cacheFilePath;
 
-        CompileResult clone() const { return {sourcePath, stage, spirv, cacheHit, cacheReadFailed, cacheFilePath}; }
+        CompileResult clone() const {
+            return {sourcePath, stage, spirv, cacheHit, cacheReadFailed, cacheFilePath};
+        }
 #else
-        CompileResult clone() const { return {sourcePath, stage, spirv}; }
+        CompileResult clone() const {
+            return {sourcePath, stage, spirv};
+        }
 #endif
     };
 
@@ -114,4 +118,4 @@ class Shader : public SharedObject<Shader> {
     std::string path_;
     VkShaderModule module_;
 };
-}; // namespace vk
+};

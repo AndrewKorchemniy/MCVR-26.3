@@ -1,7 +1,7 @@
 // This file is part of the FidelityFX SDK.
 //
 // Copyright (C) 2024 Advanced Micro Devices, Inc.
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -30,7 +30,6 @@
 #endif
 
 namespace mcvr::fsr {
-
 #ifdef MCVR_ENABLE_FFX_UPSCALER
 
 FfxApiSurfaceFormat vkToFfxFormat(VkFormat format) {
@@ -79,7 +78,7 @@ void messageCallback(uint32_t type, const wchar_t *message) {
     } else if (type == FFX_API_MESSAGE_TYPE_WARNING) {
         std::cerr << "[FSR] WARNING: ";
     } else {
-        std::cerr << "[FSR] UNKNOWN: ";
+        return;
     }
     char buffer[1024];
     wcstombs(buffer, message, sizeof(buffer) - 1);
@@ -88,5 +87,4 @@ void messageCallback(uint32_t type, const wchar_t *message) {
 }
 
 #endif
-
-} // namespace mcvr::fsr
+}

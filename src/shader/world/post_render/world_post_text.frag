@@ -54,8 +54,6 @@ void main() {
 
     float linearDepth = -(mat4(mat3(worldUBO.cameraEffectedViewMat)) * vec4(pos, 1.0)).z;
     float fragDepth = clamp(linearDepth / 1000.0, 0.0, 1.0);
-    if (postTextMode == 7u || postTextMode == 8u) {
-        fragDepth = max(fragDepth - 1e-4, 0.0);
-    }
+    if (postTextMode == 7u || postTextMode == 8u) { fragDepth = max(fragDepth - 1e-4, 0.0); }
     gl_FragDepth = fragDepth;
 }

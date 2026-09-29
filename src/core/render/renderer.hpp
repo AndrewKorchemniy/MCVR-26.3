@@ -4,7 +4,10 @@
 #include "core/all_extern.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
 
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
+#include <string>
 
 class Textures;
 class Framework;
@@ -19,13 +22,16 @@ struct Options {
     uint32_t upscalerType = 1;
     uint32_t upscalerQuality = 0;
     uint32_t denoiserMode = 1;
+    uint32_t frameGenerationMode = 0;
+    uint32_t frameGenerationMultiplier = 2;
     uint32_t rayBounces = 4;
     uint32_t debugMode = 0;
     bool needRecreate = false;
 
-    uint32_t chunkBuildingBatchSize = 2;
+    uint32_t chunkBuildingBatchSize = 8;
     uint32_t chunkBuildingTotalBatches = 4;
-    bool collectChunkEmission = false;
+    uint32_t chunkBuildingThreads = 4;
+    bool collectChunkEmission = true;
 };
 
 class Renderer : public Singleton<Renderer> {
@@ -46,9 +52,18 @@ class Renderer : public Singleton<Renderer> {
 
   private:
     Renderer(GLFWwindow *window);
+    Renderer(std::shared_ptr<vk::PresentationTarget> presentationTarget,
+             vk::OpenGLDeviceIdentity openGLDeviceIdentity);
+
+    template <typename T, typename... Args>
+    static std::shared_ptr<T> createWithMemoryTag(const std::string &tag, Args &&...args);
 
     std::shared_ptr<Framework> framework_;
     std::shared_ptr<Textures> textures_;
     std::shared_ptr<Buffers> buffers_;
     std::shared_ptr<World> world_;
+    std::mutex closeMtx_;
+    std::condition_variable closeCv_;
+    bool closing_ = false;
+    bool closed_ = false;
 };

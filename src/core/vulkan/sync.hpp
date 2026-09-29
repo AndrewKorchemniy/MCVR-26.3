@@ -8,9 +8,11 @@ class Device;
 class Semaphore : public SharedObject<Semaphore> {
   public:
     Semaphore(std::shared_ptr<Device> device);
+    Semaphore(std::shared_ptr<Device> device, bool exportable);
     ~Semaphore();
 
-    VkSemaphore& vkSemaphore();
+    VkSemaphore &vkSemaphore();
+    uint64_t exportHandle();
 
   private:
     std::shared_ptr<Device> device_;
@@ -24,11 +26,11 @@ class Fence : public SharedObject<Fence> {
     Fence(std::shared_ptr<Device> device, bool signaled);
     ~Fence();
 
-    VkFence& vkFence();
+    VkFence &vkFence();
 
   private:
     std::shared_ptr<Device> device_;
 
     VkFence fence_;
 };
-}; // namespace vk
+};

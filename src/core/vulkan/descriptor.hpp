@@ -2,6 +2,8 @@
 
 #include "core/all_extern.hpp"
 
+#include <map>
+#include <tuple>
 #include <vector>
 
 namespace vk {
@@ -23,6 +25,7 @@ class DescriptorTable : public SharedObject<DescriptorTable> {
                     std::vector<VkDescriptorSetLayout> tableLayout,
                     std::vector<VkDescriptorSet> table,
                     std::vector<std::vector<VkDescriptorType>> tableTypes,
+                    std::vector<bool> pushDescriptorSets,
                     std::vector<VkPushConstantRange> pushConstantRanges);
     ~DescriptorTable();
 
@@ -31,6 +34,8 @@ class DescriptorTable : public SharedObject<DescriptorTable> {
     std::vector<VkDescriptorSet> &descriptorSet();
     std::vector<VkDescriptorSetLayout> &descriptorSetLayout();
     VkPipelineLayout &vkPipelineLayout();
+    VkDescriptorType descriptorType(uint32_t set, uint32_t binding, const char *operation) const;
+    const std::vector<std::shared_ptr<void>> &boundResources() const;
 
     std::shared_ptr<DescriptorTable> bindImage(
         std::shared_ptr<Image> image, VkImageLayout layout, uint32_t set, uint32_t binding, uint32_t viewIndex = 0);
@@ -52,11 +57,8 @@ class DescriptorTable : public SharedObject<DescriptorTable> {
     std::shared_ptr<DescriptorTable> bindBuffer(std::shared_ptr<Buffer> buffer, uint32_t set, uint32_t binding);
     std::shared_ptr<DescriptorTable>
     bindBuffer(std::shared_ptr<Buffer> buffer, uint32_t set, uint32_t binding, uint32_t index);
-    std::shared_ptr<DescriptorTable> bindBufferRange(std::shared_ptr<Buffer> buffer,
-                                                     uint32_t set,
-                                                     uint32_t binding,
-                                                     VkDeviceSize offset,
-                                                     VkDeviceSize range);
+    std::shared_ptr<DescriptorTable> bindBufferRange(
+        std::shared_ptr<Buffer> buffer, uint32_t set, uint32_t binding, VkDeviceSize offset, VkDeviceSize range);
     std::shared_ptr<DescriptorTable> bindBufferRange(std::shared_ptr<Buffer> buffer,
                                                      uint32_t set,
                                                      uint32_t binding,
@@ -68,15 +70,28 @@ class DescriptorTable : public SharedObject<DescriptorTable> {
 
     std::shared_ptr<DescriptorTable> bindAS(std::shared_ptr<TLAS> buffer, uint32_t set, uint32_t binding);
 
+    bool isPushDescriptorSet(uint32_t set) const;
+    VkDescriptorSetLayout pushDescriptorSetLayout(uint32_t set) const;
+
   private:
+    VkDescriptorType checkedDescriptorType(uint32_t set, uint32_t binding, const char *operation) const;
+    void trackBoundResource(uint32_t set,
+                            uint32_t binding,
+                            uint32_t arrayElement,
+                            uint32_t resourceComponent,
+                            std::shared_ptr<void> resource);
+
     std::shared_ptr<Device> device_;
 
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     std::vector<VkDescriptorSetLayout> tableLayout_;
     std::vector<VkDescriptorSet> table_;
     std::vector<std::vector<VkDescriptorType>> tableTypes_;
+    std::vector<bool> pushDescriptorSets_;
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     std::vector<VkPushConstantRange> pushConstantRanges_;
+    std::vector<std::shared_ptr<void>> boundResources_;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, size_t> boundResourceIndices_;
 };
 
 class DescriptorTableBuilder {
@@ -89,8 +104,10 @@ class DescriptorTableBuilder {
         DescriptorLayoutSetBuilder &parent;
         std::vector<VkDescriptorSetLayoutBinding> bindings;
         std::vector<VkDescriptorType> types;
+        bool isPushDescriptor = false;
+        bool isStaticDescriptor = false;
 
-        DescriptorLayoutSetBindingBuilder(DescriptorLayoutSetBuilder &parent);
+        DescriptorLayoutSetBindingBuilder(DescriptorLayoutSetBuilder &parent, bool isPushDescriptor);
 
         DescriptorLayoutSetBindingBuilder &defineDescriptorLayoutSetBinding(VkDescriptorSetLayoutBinding binding);
         DescriptorLayoutSetBuilder &endDescriptorLayoutSetBinding();
@@ -103,6 +120,8 @@ class DescriptorTableBuilder {
         DescriptorLayoutSetBuilder(DescriptorTableBuilder &parent);
 
         DescriptorLayoutSetBindingBuilder &beginDescriptorLayoutSetBinding();
+        DescriptorLayoutSetBindingBuilder &beginStaticDescriptorLayoutSetBinding();
+        DescriptorLayoutSetBindingBuilder &beginPushDescriptorLayoutSetBinding();
         DescriptorTableBuilder &endDescriptorLayoutSet();
     };
 
@@ -118,4 +137,4 @@ class DescriptorTableBuilder {
 
     std::vector<VkPushConstantRange> pushConstantRanges;
 };
-}; // namespace vk
+};

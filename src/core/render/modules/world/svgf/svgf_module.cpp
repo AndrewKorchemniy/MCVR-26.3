@@ -1,4 +1,5 @@
 #include "svgf_module.hpp"
+#include "core/profiler/profiler.hpp"
 #include "core/render/buffers.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
@@ -121,7 +122,6 @@ void SvgfModule::preClose() {
     m_denoiser.reset();
 }
 
-// --- Render Logic ---
 
 SvgfModuleContext::SvgfModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
                                      std::shared_ptr<WorldPipelineContext> worldPipelineContext,
@@ -143,13 +143,13 @@ SvgfModuleContext::SvgfModuleContext(std::shared_ptr<FrameworkContext> framework
       denoisedSpecularRadianceImage(svgfModule->denoisedSpecularRadianceImages_[frameworkContext->frameIndex]) {}
 
 void SvgfModuleContext::render() {
+    MCVR_PROFILE_SCOPE("native.SvgfModuleContext.render");
     auto module = svgfModule.lock();
     if (!module || !module->denoiser()) return;
 
     auto context = frameworkContext.lock();
     auto worldCommandBuffer = context->worldCommandBuffer;
 
-    // Transition intermediate outputs to General layout before compute
     std::vector<vk::CommandBuffer::ImageMemoryBarrier> initBarriers;
     auto initImage = [&](std::shared_ptr<vk::DeviceLocalImage> image) {
         if (!image || image->imageLayout() != VK_IMAGE_LAYOUT_UNDEFINED) return;

@@ -9,11 +9,14 @@
 #include <map>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldPipelineContext;
 
 struct WorldModuleContext;
+namespace mcvr {
+struct FrameGenerationInputs;
+}
 
 struct MotionUpscalePushConstants {
     float scaleX;
@@ -22,6 +25,8 @@ struct MotionUpscalePushConstants {
     uint32_t srcHeight;
     uint32_t dstWidth;
     uint32_t dstHeight;
+    float jitterX;
+    float jitterY;
 };
 
 class WorldModule {
@@ -45,7 +50,6 @@ class WorldModule {
     virtual void
     bindTexture(std::shared_ptr<vk::Sampler> sampler, std::shared_ptr<vk::DeviceLocalImage> image, int index) = 0;
 
-    // release resources that must be released before deconstruction
     virtual void preClose() = 0;
 
   protected:
@@ -60,5 +64,8 @@ struct WorldModuleContext {
     WorldModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
                        std::shared_ptr<WorldPipelineContext> worldPipelineContext);
 
+    void setWorldPipelineContext(std::shared_ptr<WorldPipelineContext> worldPipelineContext);
+
     virtual void render() = 0;
+    virtual bool populateFrameGenerationInputs(mcvr::FrameGenerationInputs &inputs);
 };

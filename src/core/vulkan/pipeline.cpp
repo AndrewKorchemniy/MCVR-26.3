@@ -6,11 +6,8 @@
 #include "core/vulkan/shader.hpp"
 
 #include <iostream>
+#include <stdexcept>
 #include <vector>
-
-std::ostream &graphicsPipelineCout() {
-    return std::cout << "[GraphicsPipeline] ";
-}
 
 std::ostream &graphicsPipelineCerr() {
     return std::cerr << "[GraphicsPipeline] ";
@@ -21,10 +18,6 @@ vk::GraphicsPipeline::GraphicsPipeline(std::shared_ptr<Device> device, VkPipelin
 
 vk::GraphicsPipeline::~GraphicsPipeline() {
     vkDestroyPipeline(device_->vkDevice(), pipeline_, nullptr);
-
-#ifdef DEBUG
-    graphicsPipelineCout() << "graphics pipeline deconstructed" << std::endl;
-#endif
 }
 
 VkPipeline &vk::GraphicsPipeline::vkPipeline() {
@@ -123,10 +116,6 @@ vk::GraphicsPipelineBuilder &
 vk::GraphicsPipelineBuilder::ColorBlendAttachmentStateBuilder::endColorBlendAttachmentState() {
     parent.colorBlendState_.attachmentCount = colorBlendAttachmentStates.size();
     parent.colorBlendState_.pAttachments = colorBlendAttachmentStates.data();
-#ifdef DEBUG
-    graphicsPipelineCout() << "ColorBlendAttachmentState attachmentCount:" << colorBlendAttachmentStates.size()
-                           << std::endl;
-#endif
     return parent;
 }
 
@@ -221,12 +210,6 @@ vk::GraphicsPipelineBuilder &vk::GraphicsPipelineBuilder::definePipelineLayout(V
     return *this;
 }
 
-// vk::PipelineBuilder &
-// vk::PipelineBuilder::defineDepthStencilState(VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo) {
-//     depthStencilState_ = depthStencilStateCreateInfo;
-//     return *this;
-// }
-
 vk::GraphicsPipelineBuilder &
 vk::GraphicsPipelineBuilder::defineDepthStencilState(vk::GraphicsPipelineBuilder::DepthStencilState depthStencilState) {
     depthStencilState_.depthTestEnable = depthStencilState.depthTestEnable;
@@ -260,14 +243,10 @@ std::shared_ptr<vk::GraphicsPipeline> vk::GraphicsPipelineBuilder::build(std::sh
     pipelineCreateInfo.basePipelineIndex = -1;
 
     VkPipeline pipeline;
-    if (vkCreateGraphicsPipelines(device->vkDevice(), VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline) !=
+    if (vkCreateGraphicsPipelines(device->vkDevice(), device->vkPipelineCache(), 1, &pipelineCreateInfo, nullptr, &pipeline) !=
         VK_SUCCESS) {
         graphicsPipelineCerr() << "failed to create graphics pipeline" << std::endl;
         exit(EXIT_FAILURE);
-    } else {
-#ifdef DEBUG
-        graphicsPipelineCout() << "created graphics pipeline" << std::endl;
-#endif
     }
 
     return std::make_shared<GraphicsPipeline>(device, pipeline);
@@ -286,6 +265,7 @@ vk::RayTracingPipelineBuilder::ShaderStageBuilder::defineShaderStage(std::shared
     shaderStageCreateInfo.pName = "main";
 
     shaderStageCreateInfos.push_back(shaderStageCreateInfo);
+    shaders.push_back(std::move(shader));
     return *this;
 }
 
@@ -334,6 +314,12 @@ vk::RayTracingPipelineBuilder::definePipelineLayout(std::shared_ptr<DescriptorTa
     return *this;
 }
 
+vk::RayTracingPipelineBuilder &vk::RayTracingPipelineBuilder::defineMaxRayRecursionDepth(uint32_t depth) {
+    if (depth == 0) { throw std::runtime_error("ray tracing recursion depth must be at least one"); }
+    maxRayRecursionDepth_ = depth;
+    return *this;
+}
+
 std::shared_ptr<vk::RayTracingPipeline> vk::RayTracingPipelineBuilder::build(std::shared_ptr<Device> device) {
     VkRayTracingPipelineCreateInfoKHR pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_RAY_TRACING_PIPELINE_CREATE_INFO_KHR;
@@ -342,11 +328,12 @@ std::shared_ptr<vk::RayTracingPipeline> vk::RayTracingPipelineBuilder::build(std
     pipelineInfo.groupCount = shaderGroupBuilder_.shaderGroupCreateInfos.size();
     pipelineInfo.pGroups = shaderGroupBuilder_.shaderGroupCreateInfos.data();
     pipelineInfo.layout = pipelineLayout_;
-    pipelineInfo.maxPipelineRayRecursionDepth = 3;
+    pipelineInfo.maxPipelineRayRecursionDepth = maxRayRecursionDepth_;
+    pipelineInfo.flags = VK_PIPELINE_CREATE_RAY_TRACING_SKIP_AABBS_BIT_KHR;
 
     VkPipeline rayTracingPipeline;
     if (vkCreateRayTracingPipelinesKHR(device->vkDevice(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
-                                        &rayTracingPipeline) != VK_SUCCESS) {
+                                       &rayTracingPipeline) != VK_SUCCESS) {
         std::cerr << "Cannot build ray tracing pipeline" << std::endl;
         exit(EXIT_FAILURE);
     }
@@ -355,7 +342,7 @@ std::shared_ptr<vk::RayTracingPipeline> vk::RayTracingPipelineBuilder::build(std
 }
 
 vk::ComputePipelineBuilder &vk::ComputePipelineBuilder::defineShader(std::shared_ptr<vk::Shader> shader) {
-    shaderModule_ = shader->vkShaderModule();
+    shader_ = std::move(shader);
     return *this;
 }
 
@@ -366,20 +353,38 @@ vk::ComputePipelineBuilder::definePipelineLayout(std::shared_ptr<vk::DescriptorT
 }
 
 std::shared_ptr<vk::ComputePipeline> vk::ComputePipelineBuilder::build(std::shared_ptr<vk::Device> device) {
+    std::vector<VkSpecializationMapEntry> specializationEntries;
+    specializationEntries.reserve(specializationConstants_.size());
+    for (uint32_t i = 0; i < specializationConstants_.size(); ++i) {
+        specializationEntries.push_back({i, i * uint32_t(sizeof(uint32_t)), sizeof(uint32_t)});
+    }
+    const VkSpecializationInfo specializationInfo{
+        .mapEntryCount = static_cast<uint32_t>(specializationEntries.size()),
+        .pMapEntries = specializationEntries.data(),
+        .dataSize = specializationConstants_.size() * sizeof(uint32_t),
+        .pData = specializationConstants_.data(),
+    };
     VkComputePipelineCreateInfo computePipelineCreateInfo{};
     computePipelineCreateInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     computePipelineCreateInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     computePipelineCreateInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    computePipelineCreateInfo.stage.module = shaderModule_;
+    computePipelineCreateInfo.stage.module = shader_->vkShaderModule();
     computePipelineCreateInfo.stage.pName = "main";
+    computePipelineCreateInfo.stage.pSpecializationInfo =
+        specializationConstants_.empty() ? nullptr : &specializationInfo;
     computePipelineCreateInfo.layout = pipelineLayout_;
 
     VkPipeline compPipeline;
-    if (vkCreateComputePipelines(device->vkDevice(), VK_NULL_HANDLE, 1, &computePipelineCreateInfo, nullptr,
+    if (vkCreateComputePipelines(device->vkDevice(), device->vkPipelineCache(), 1, &computePipelineCreateInfo, nullptr,
                                  &compPipeline) != VK_SUCCESS) {
         std::cerr << "Cannot build compute pipeline" << std::endl;
         exit(EXIT_FAILURE);
     }
 
     return ComputePipeline::create(device, compPipeline);
+}
+
+vk::ComputePipelineBuilder &vk::ComputePipelineBuilder::defineSpecializationConstants(std::vector<uint32_t> values) {
+    specializationConstants_ = std::move(values);
+    return *this;
 }

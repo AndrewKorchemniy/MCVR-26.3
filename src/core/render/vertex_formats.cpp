@@ -97,8 +97,7 @@ vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PositionCol
         {VK_FORMAT_R8G8B8A8_UNORM, offsetof(VertexFormat::PositionColorNormal, color)},
         {VK_FORMAT_R8G8B8A8_SNORM, offsetof(VertexFormat::PositionColorNormal, normal)},
     };
-    static vk::VertexLayoutInfo vertexLayoutInfo =
-        initVertexLayout<vk::VertexFormat::PositionColorNormal>(attributes);
+    static vk::VertexLayoutInfo vertexLayoutInfo = initVertexLayout<vk::VertexFormat::PositionColorNormal>(attributes);
     return vertexLayoutInfo;
 }
 
@@ -109,8 +108,7 @@ vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PositionCol
         {VK_FORMAT_R8G8B8A8_UNORM, offsetof(VertexFormat::PositionColorLight, color)},
         {VK_FORMAT_R16G16_SINT, offsetof(VertexFormat::PositionColorLight, uv2)},
     };
-    static vk::VertexLayoutInfo vertexLayoutInfo =
-        initVertexLayout<vk::VertexFormat::PositionColorLight>(attributes);
+    static vk::VertexLayoutInfo vertexLayoutInfo = initVertexLayout<vk::VertexFormat::PositionColorLight>(attributes);
     return vertexLayoutInfo;
 }
 
@@ -150,26 +148,35 @@ vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PositionOnl
 }
 
 template <>
-vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PBRVertex>() {
+vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::EntityPBRVertex>() {
     static std::vector<VertexAttribute> attributes = {
-        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::PBRVertex, pos)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, useNorm)},
-        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::PBRVertex, norm)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, useColorLayer)},
-        {VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(VertexFormat::PBRVertex, colorLayer)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, useTexture)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, useOverlay)},
-        {VK_FORMAT_R32G32_SFLOAT, offsetof(VertexFormat::PBRVertex, textureUV)},
-        {VK_FORMAT_R32G32_SINT, offsetof(VertexFormat::PBRVertex, overlayUV)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, useGlint)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, textureID)},
-        {VK_FORMAT_R32G32_SFLOAT, offsetof(VertexFormat::PBRVertex, glintUV)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, glintTexture)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, useLight)},
-        {VK_FORMAT_R32G32_SINT, offsetof(VertexFormat::PBRVertex, lightUV)},
-        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::PBRVertex, coordinate)},
-        {VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(VertexFormat::PBRVertex, postBase)},
+        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::EntityPBRVertex, pos)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, normalOct)},
+        {VK_FORMAT_R32G32_SFLOAT, offsetof(VertexFormat::EntityPBRVertex, textureUV)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, colorRGBA8)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, lightUV)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, overlayUV)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, glintUVHalf)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, textureID)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, glintTexture)},
+        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::EntityPBRVertex, postBase)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::EntityPBRVertex, packedData)},
     };
-    static vk::VertexLayoutInfo vertexLayoutInfo = initVertexLayout<vk::VertexFormat::PBRVertex>(attributes);
+    static vk::VertexLayoutInfo vertexLayoutInfo = initVertexLayout<vk::VertexFormat::EntityPBRVertex>(attributes);
+    return vertexLayoutInfo;
+}
+
+template <>
+vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::ChunkPBRVertex>() {
+    static std::vector<VertexAttribute> attributes = {
+        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::ChunkPBRVertex, posX)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::ChunkPBRVertex, normalOct)},
+        {VK_FORMAT_R32G32_SFLOAT, offsetof(VertexFormat::ChunkPBRVertex, textureUV)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::ChunkPBRVertex, colorRGBA8)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::ChunkPBRVertex, lightUV)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::ChunkPBRVertex, textureID)},
+        {VK_FORMAT_R32_UINT, offsetof(VertexFormat::ChunkPBRVertex, packedData)},
+    };
+    static vk::VertexLayoutInfo vertexLayoutInfo = initVertexLayout<vk::VertexFormat::ChunkPBRVertex>(attributes);
     return vertexLayoutInfo;
 }

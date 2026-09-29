@@ -13,7 +13,7 @@ layout(set = 0, binding = 6, rgba16f) uniform image2D oHistory;
 layout(set = 0, binding = 7, r32f) uniform image2D oHistoryDepth;
 
 layout(push_constant) uniform TAAConstants {
-    vec4 params; // x: alpha, y: depthThreshold, z: depthScale, w: useHistory
+    vec4 params;
     vec2 jitterOffset;
 };
 
@@ -63,13 +63,13 @@ vec2 getDilatedMotion(ivec2 coord, ivec2 size) {
     float closestDepth = 100000.0;
     vec2 bestMotion = vec2(0.0);
 
-    for(int y=-1; y<=1; ++y) {
-        for(int x=-1; x<=1; ++x) {
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
             ivec2 p = coord + ivec2(x, y);
-            if(p.x < 0 || p.y < 0 || p.x >= size.x || p.y >= size.y) continue;
+            if (p.x < 0 || p.y < 0 || p.x >= size.x || p.y >= size.y) continue;
 
             float d = texelFetch(iDepth, p, 0).r;
-            if(d < closestDepth) {
+            if (d < closestDepth) {
                 closestDepth = d;
                 bestMotion = texelFetch(iMotionVector, p, 0).xy;
             }
@@ -117,7 +117,7 @@ void main() {
     float motionLength = length(motion);
 
     float velocityFactor = motionLength * (3840.0 / float(size.x));
-    
+
     float boxScaleT = clamp(velocityFactor / 30.0, 0.0, 1.0);
     float boxScale = mix(0.75, 1.5, boxScaleT);
 
@@ -138,8 +138,8 @@ void main() {
     bool historyValid = useHistory > 0.5;
 
     if (historyValid) {
-        if (prevPos.x < 0.5 || prevPos.y < 0.5 ||
-            prevPos.x >= float(size.x) - 0.5 || prevPos.y >= float(size.y) - 0.5) {
+        if (prevPos.x < 0.5 || prevPos.y < 0.5 || prevPos.x >= float(size.x) - 0.5 ||
+            prevPos.y >= float(size.y) - 0.5) {
             historyValid = false;
         }
     }
@@ -148,22 +148,19 @@ void main() {
         ivec2 prevCoord = ivec2(prevPos);
         float prevDepth = imageLoad(iHistoryDepth, prevCoord).x;
         float depthThreshold = currDepth * params.z + params.y;
-        // Relax threshold when moving fast
         depthThreshold *= (1.0 + velocityFactor * 0.5);
-        if (abs(currDepth - prevDepth) > depthThreshold) {
-            historyValid = false;
-        }
+        if (abs(currDepth - prevDepth) > depthThreshold) { historyValid = false; }
     }
 
     vec3 result = center;
     float resultAlpha = centerAlpha;
 
     vec2 prevUV = prevPos / vec2(size);
-    vec4 oldRGBA = textureLod(iHistory, prevUV, 0);
+    vec4 oldRGBA = historyValid ? textureLod(iHistory, prevUV, 0) : vec4(0.0);
     vec3 old = oldRGBA.rgb;
     float oldAlpha = oldRGBA.a;
 
-    bool hasHistory = (old.r + old.g + old.b) > 0.0001;
+    bool hasHistory = historyValid && (old.r + old.g + old.b) > 0.0001;
 
     if (hasHistory) {
         vec3 oldTM = tonemap(old);
@@ -172,7 +169,6 @@ void main() {
         float softness = boxScaleT * 0.15;
         vec3 oldClipped = clipToBox(oldYCoCg, boxCenter, boxExtent, softness);
 
-        // Hard AABB clamp as final safeguard
         oldClipped = clamp(oldClipped, minColor, maxColor);
 
         vec3 oldClippedRGB = YCoCgToRGB(oldClipped);

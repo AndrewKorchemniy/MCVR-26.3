@@ -12,7 +12,9 @@ layout(push_constant) uniform DepthUpscaleParams {
     uint srcHeight;
     uint dstWidth;
     uint dstHeight;
-} params;
+    vec2 jitter;
+}
+params;
 
 float loadDepth(ivec2 coord) {
     coord = clamp(coord, ivec2(0), ivec2(int(params.srcWidth) - 1, int(params.srcHeight) - 1));
@@ -21,12 +23,10 @@ float loadDepth(ivec2 coord) {
 
 void main() {
     uvec2 coord = gl_GlobalInvocationID.xy;
-    if (coord.x >= params.dstWidth || coord.y >= params.dstHeight) {
-        return;
-    }
+    if (coord.x >= params.dstWidth || coord.y >= params.dstHeight) { return; }
 
     vec2 uv = (vec2(coord) + 0.5) / vec2(params.dstWidth, params.dstHeight);
-    vec2 srcPixel = uv * vec2(params.srcWidth, params.srcHeight) - 0.5;
+    vec2 srcPixel = uv * vec2(params.srcWidth, params.srcHeight) - 0.5 - params.jitter;
     ivec2 p0 = ivec2(floor(srcPixel));
     ivec2 p1 = p0 + ivec2(1);
     vec2 f = fract(srcPixel);
@@ -39,9 +39,9 @@ void main() {
     float minDepth = min(min(d00, d10), min(d01, d11));
     float maxDepth = max(max(d00, d10), max(d01, d11));
 
-    float bilinearX0 = mix(d00, d10, f.x);
-    float bilinearX1 = mix(d01, d11, f.x);
-    float bilinearDepth = mix(bilinearX0, bilinearX1, f.y);
+    float bilinearX0 = mix(1.0 / max(d00, 1e-6), 1.0 / max(d10, 1e-6), f.x);
+    float bilinearX1 = mix(1.0 / max(d01, 1e-6), 1.0 / max(d11, 1e-6), f.x);
+    float bilinearDepth = 1.0 / mix(bilinearX0, bilinearX1, f.y);
 
     float edgeThreshold = max(0.5, minDepth * 0.02);
     float outputDepth = (maxDepth - minDepth) > edgeThreshold ? minDepth : bilinearDepth;

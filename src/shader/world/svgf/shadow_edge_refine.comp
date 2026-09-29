@@ -5,7 +5,7 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;   // R: visibility, G: hitDist, B: NoL
+layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;
 layout(set = 0, binding = 1, rgba16f) uniform image2D shadowOutputImage;
 layout(set = 0, binding = 2, r32f) uniform image2D linearDepthImage;
 layout(set = 0, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
@@ -25,8 +25,7 @@ void main() {
     float centerHit = center.y;
     float centerNoL = clamp(center.z, 0.0, 1.0);
     float centerA = center.w;
-    
-    
+
     float centerDepth = imageLoad(linearDepthImage, pixel).r;
     vec3 centerNormal = normalizeSafe(imageLoad(normalRoughnessImage, pixel).xyz);
 
@@ -39,7 +38,6 @@ void main() {
         return;
     }
 
-    // Edge + noise detection (3x3)
     float minV = 1.0;
     float maxV = 0.0;
     float sumV = 0.0;
@@ -65,7 +63,6 @@ void main() {
     float edgeBoost = smoothstep(0.08, 0.35, edge);
     float noiseBoost = smoothstep(0.005, 0.04, varianceV);
 
-    // Penumbra proxy
     float lightSize = 1.5;
     float penumbra = (centerHit / max(centerDepth, 1e-3)) * lightSize;
     penumbra *= mix(0.6, 1.4, 1.0 - centerNoL);
@@ -117,11 +114,7 @@ void main() {
             wDepth = mix(wDepth, 1.0, relax);
             wNormal = mix(wNormal, 1.0, relax);
 
-            float w = wDepth
-                    * wNormal
-                    * exp(-shadowDiff / phiShadow)
-                    * exp(-hitDiff / 3.0)
-                    * exp(-nolDiff / phiNoL);
+            float w = wDepth * wNormal * exp(-shadowDiff / phiShadow) * exp(-hitDiff / 3.0) * exp(-nolDiff / phiNoL);
 
             float dist2 = float(dx * dx + dy * dy);
             w *= exp(-dist2 / (2.0 * sigma * sigma));
@@ -137,7 +130,6 @@ void main() {
     float outHit = sumHit / max(sumW, 1e-4);
     float outNoL = clamp(sumNoL / max(sumW, 1e-4), 0.0, 1.0);
 
-    // Robust mean/median clamp for dirty edges
     float meanMix = (0.55 * noiseBoost + 0.40 * edgeBoost) * mix(1.0, 2.0, penumbraFactor);
     meanMix = clamp(meanMix, 0.0, 0.85);
     outVis = mix(outVis, meanV, meanMix);

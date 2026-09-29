@@ -4,15 +4,17 @@
 #include "core/render/modules/world/xess_upscaler/xess_wrapper.hpp"
 #include "core/vulkan/instance.hpp"
 #include "core/vulkan/physical_device.hpp"
+#include "core/vulkan/result.hpp"
+#include "core/render/renderer.hpp"
 
 #include <cstring>
+#include <chrono>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <unordered_set>
 #include <vector>
-
-std::ostream &deviceCout() {
-    return std::cout << "[Device] ";
-}
 
 std::ostream &deviceCerr() {
     return std::cerr << "[Device] ";
@@ -22,7 +24,6 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
                    std::shared_ptr<Window> window,
                    std::shared_ptr<PhysicalDevice> physicalDevice)
     : instance_(instance), window_(window), physicalDevice_(physicalDevice) {
-    // enabled device extensions
     std::vector<const char *> enabledExtensions = {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
@@ -31,36 +32,61 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
         VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
         VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+        VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
         VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
         VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME,
         VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
         VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME,
-        // VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
     };
-    std::vector<std::string> dlssRequiredExtensions;
-    bool dlssRequirementQuerySuccess = false;
+    std::vector<std::string> dlssRRRequiredExtensions;
+    bool dlssRRRequirementQuerySuccess = false;
+    std::vector<std::string> dlssSRRequiredExtensions;
+    bool dlssSRRequirementQuerySuccess = false;
+    std::vector<std::string> dlssFrameGenerationRequiredExtensions;
+    bool dlssFrameGenerationRequirementQuerySuccess = false;
 #ifdef MCVR_ENABLE_XESS
     std::vector<std::string> xessRequiredExtensions;
     bool xessRequirementQuerySuccess = false;
 #endif
 
-    std::vector<VkExtensionProperties> dlssExtensions;
-    NVSDK_NGX_Result dlssResult =
-        NgxContext::getDlssRRRequiredDeviceExtensions(instance_, physicalDevice_, dlssExtensions);
-    if (NVSDK_NGX_FAILED(dlssResult)) {
-        deviceCerr() << "dlss device extensions unavailable; skipping." << std::endl;
+    std::vector<VkExtensionProperties> dlssRRExtensions;
+    NVSDK_NGX_Result dlssRRResult =
+        NgxContext::getDlssRRRequiredDeviceExtensions(instance_, physicalDevice_, dlssRRExtensions);
+    if (NVSDK_NGX_FAILED(dlssRRResult)) {
+        deviceCerr() << "dlss ray reconstruction device extensions unavailable; skipping." << std::endl;
     } else {
-        dlssRequirementQuerySuccess = true;
-#ifdef DEBUG
-        deviceCout() << "dlss instance extensions:" << std::endl;
-#endif
-        for (const auto &dlssExtension : dlssExtensions) {
-            dlssRequiredExtensions.emplace_back(dlssExtension.extensionName);
-            if (std::strcmp(dlssExtension.extensionName, "VK_EXT_buffer_device_address") == 0)
-                continue; // already enabled using PHYSICAL_DEVICE_VULKAN_1_2_FEATURES
-#ifdef DEBUG
-            deviceCout() << "\t" << dlssExtension.extensionName << std::endl;
-#endif
+        dlssRRRequirementQuerySuccess = true;
+        for (const auto &dlssExtension : dlssRRExtensions) {
+            dlssRRRequiredExtensions.emplace_back(dlssExtension.extensionName);
+            if (std::strcmp(dlssExtension.extensionName, "VK_EXT_buffer_device_address") == 0) { continue; }
+            enabledExtensions.push_back(dlssExtension.extensionName);
+        }
+    }
+
+    std::vector<VkExtensionProperties> dlssSRExtensions;
+    NVSDK_NGX_Result dlssSRResult =
+        NgxContext::getDlssSRRequiredDeviceExtensions(instance_, physicalDevice_, dlssSRExtensions);
+    if (NVSDK_NGX_FAILED(dlssSRResult)) {
+        deviceCerr() << "dlss super resolution device extensions unavailable; skipping." << std::endl;
+    } else {
+        dlssSRRequirementQuerySuccess = true;
+        for (const auto &dlssExtension : dlssSRExtensions) {
+            dlssSRRequiredExtensions.emplace_back(dlssExtension.extensionName);
+            if (std::strcmp(dlssExtension.extensionName, "VK_EXT_buffer_device_address") == 0) { continue; }
+            enabledExtensions.push_back(dlssExtension.extensionName);
+        }
+    }
+
+    std::vector<VkExtensionProperties> dlssFrameGenerationExtensions;
+    NVSDK_NGX_Result dlssFrameGenerationResult = NgxContext::getDlssFrameGenerationRequiredDeviceExtensions(
+        instance_, physicalDevice_, dlssFrameGenerationExtensions);
+    if (NVSDK_NGX_FAILED(dlssFrameGenerationResult)) {
+        deviceCerr() << "dlss frame generation device extensions unavailable; skipping." << std::endl;
+    } else {
+        dlssFrameGenerationRequirementQuerySuccess = true;
+        for (const auto &dlssExtension : dlssFrameGenerationExtensions) {
+            dlssFrameGenerationRequiredExtensions.emplace_back(dlssExtension.extensionName);
+            if (std::strcmp(dlssExtension.extensionName, "VK_EXT_buffer_device_address") == 0) { continue; }
             enabledExtensions.push_back(dlssExtension.extensionName);
         }
     }
@@ -70,14 +96,8 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     if (mcvr::XeSSWrapper::getRequiredDeviceExtensions(instance_->vkInstance(), physicalDevice_->vkPhysicalDevice(),
                                                        xessExtensions)) {
         xessRequirementQuerySuccess = true;
-#    ifdef DEBUG
-        deviceCout() << "xess device extensions:" << std::endl;
-#    endif
         for (const char *extension : xessExtensions) {
             xessRequiredExtensions.emplace_back(extension);
-#    ifdef DEBUG
-            deviceCout() << "\t" << extension << std::endl;
-#    endif
             enabledExtensions.push_back(extension);
         }
     } else {
@@ -98,23 +118,87 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     if (supportedExtensions.find(VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME) != supportedExtensions.end()) {
         enabledExtensions.push_back(VK_AMD_DEVICE_COHERENT_MEMORY_EXTENSION_NAME);
     }
+    if (supportedExtensions.find(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) != supportedExtensions.end()) {
+        enabledExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        memoryBudgetEnabled_ = true;
+    }
+#ifdef MCVR_UI_BACKEND_OPENGL
+    const std::vector<const char *> openglUiRequiredExtensions = {
+        VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+#    if defined(_WIN32)
+        VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
+#    else
+        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+#    endif
+        VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
+#    if defined(_WIN32)
+        VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME,
+#    else
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+#    endif
+    };
+    for (const char *extension : openglUiRequiredExtensions) {
+        if (supportedExtensions.find(extension) == supportedExtensions.end()) {
+            deviceCerr() << "OpenGL UI backend requires unsupported Vulkan device extension: " << extension
+                         << std::endl;
+            exit(EXIT_FAILURE);
+        }
+        enabledExtensions.push_back(extension);
+    }
+#endif
+
+    bool supportsInvocationReorderEXTExtension = false;
+    bool supportsInvocationReorderNVExtension = false;
+#if defined(VK_EXT_ray_tracing_invocation_reorder)
+    supportsInvocationReorderEXTExtension =
+        supportedExtensions.find(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME) != supportedExtensions.end();
+#endif
+#if defined(VK_NV_ray_tracing_invocation_reorder)
+    supportsInvocationReorderNVExtension =
+        supportedExtensions.find(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME) != supportedExtensions.end();
+#endif
 
     auto areRequiredExtensionsSupported = [&](const std::vector<std::string> &requiredExtensions) {
         for (const auto &requiredExtension : requiredExtensions) {
-            if (requiredExtension == "VK_EXT_buffer_device_address") {
-                // Covered by Vulkan 1.2 buffer device address feature path
-                continue;
-            }
+            if (requiredExtension == "VK_EXT_buffer_device_address") { continue; }
             if (supportedExtensions.find(requiredExtension) == supportedExtensions.end()) { return false; }
         }
         return true;
     };
 
-    dlssDeviceExtensionsCompatible_ = instance_->isDlssInstanceExtensionsCompatible() && dlssRequirementQuerySuccess &&
-                                      areRequiredExtensionsSupported(dlssRequiredExtensions);
-    if (!dlssDeviceExtensionsCompatible_) {
-        deviceCerr() << "dlss device extension requirements are not fully satisfied." << std::endl;
+    dlssRRDeviceExtensionsCompatible_ = instance_->isDlssRRInstanceExtensionsCompatible() &&
+                                        dlssRRRequirementQuerySuccess &&
+                                        areRequiredExtensionsSupported(dlssRRRequiredExtensions);
+    if (!dlssRRDeviceExtensionsCompatible_) {
+        deviceCerr() << "dlss ray reconstruction device extension requirements are not fully satisfied." << std::endl;
     }
+
+    dlssSRDeviceExtensionsCompatible_ = instance_->isDlssSRInstanceExtensionsCompatible() &&
+                                        dlssSRRequirementQuerySuccess &&
+                                        areRequiredExtensionsSupported(dlssSRRequiredExtensions);
+    if (!dlssSRDeviceExtensionsCompatible_) {
+        deviceCerr() << "dlss super resolution device extension requirements are not fully satisfied." << std::endl;
+    }
+
+    dlssFrameGenerationDeviceExtensionsCompatible_ =
+        instance_->isDlssFrameGenerationInstanceExtensionsCompatible() && dlssFrameGenerationRequirementQuerySuccess &&
+        areRequiredExtensionsSupported(dlssFrameGenerationRequiredExtensions);
+    if (!dlssFrameGenerationDeviceExtensionsCompatible_) {
+        deviceCerr() << "dlss frame generation device extension requirements are not fully satisfied." << std::endl;
+    }
+
+#ifdef MCVR_ENABLE_FFX_UPSCALER
+    const std::vector<std::string> fsrFrameGenerationRequiredExtensions = {
+        VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,          VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME,
+        VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME,
+        VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
+    };
+    fsrFrameGenerationDeviceExtensionsCompatible_ =
+        areRequiredExtensionsSupported(fsrFrameGenerationRequiredExtensions);
+    if (!fsrFrameGenerationDeviceExtensionsCompatible_) {
+        deviceCerr() << "fsr frame generation device extension requirements are not fully satisfied." << std::endl;
+    }
+#endif
 
 #ifdef MCVR_ENABLE_XESS
     xessDeviceExtensionsCompatible_ = instance_->isXessInstanceExtensionsCompatible() && xessRequirementQuerySuccess &&
@@ -136,12 +220,6 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
         filteredExtensions.push_back(ext);
     }
 
-#ifdef DEBUG
-    deviceCout() << "selected instance extensions:" << std::endl;
-    for (int i = 0; i < filteredExtensions.size(); i++) { deviceCout() << "\t" << filteredExtensions[i] << std::endl; }
-#endif
-
-    // query supported features
     VkPhysicalDeviceMaintenance5Features supportedMaintenance5{};
     supportedMaintenance5.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
 
@@ -182,18 +260,59 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     supportedRayTracingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
     supportedRayTracingFeatures.pNext = &supportedAccelerationStructureFeatures;
 
+    void *supportedFeatureChain = &supportedRayTracingFeatures;
+#if defined(VK_NV_ray_tracing_invocation_reorder)
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV supportedInvocationReorderNV{};
+    if (supportsInvocationReorderNVExtension) {
+        supportedInvocationReorderNV.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
+        supportedInvocationReorderNV.pNext = supportedFeatureChain;
+        supportedFeatureChain = &supportedInvocationReorderNV;
+    }
+#endif
+#if defined(VK_EXT_ray_tracing_invocation_reorder)
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT supportedInvocationReorderEXT{};
+    if (supportsInvocationReorderEXTExtension) {
+        supportedInvocationReorderEXT.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
+        supportedInvocationReorderEXT.pNext = supportedFeatureChain;
+        supportedFeatureChain = &supportedInvocationReorderEXT;
+    }
+#endif
+
     VkPhysicalDeviceFeatures2 supportedFeatures2{};
     supportedFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    supportedFeatures2.pNext = &supportedRayTracingFeatures;
+    supportedFeatures2.pNext = supportedFeatureChain;
 
     vkGetPhysicalDeviceFeatures2(physicalDevice_->vkPhysicalDevice(), &supportedFeatures2);
+
+#if defined(VK_EXT_ray_tracing_invocation_reorder)
+    if (supportsInvocationReorderEXTExtension && supportedInvocationReorderEXT.rayTracingInvocationReorder) {
+        filteredExtensions.push_back(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+    }
+#endif
+#if defined(VK_NV_ray_tracing_invocation_reorder)
+    if (
+#    if defined(VK_EXT_ray_tracing_invocation_reorder)
+        !(supportsInvocationReorderEXTExtension && supportedInvocationReorderEXT.rayTracingInvocationReorder) &&
+#    endif
+        supportsInvocationReorderNVExtension && supportedInvocationReorderNV.rayTracingInvocationReorder) {
+        filteredExtensions.push_back(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
+    }
+#endif
+
+    if (supportedVulkan11.shaderDrawParameters != VK_TRUE) {
+        deviceCerr() << "Physical device does not support VkPhysicalDeviceVulkan11Features::shaderDrawParameters. "
+                     << "This renderer requires SPIR-V DrawParameters for shaders that use gl_BaseInstance."
+                     << std::endl;
+        exit(EXIT_FAILURE);
+    }
 
     std::unordered_set<std::string> selectedExtensions;
     selectedExtensions.reserve(filteredExtensions.size());
     for (const auto *ext : filteredExtensions) { selectedExtensions.insert(ext); }
     auto hasExtension = [&](const char *name) { return selectedExtensions.find(name) != selectedExtensions.end(); };
 
-    // enabling features
     VkPhysicalDeviceMaintenance5Features maintenance5Features{};
     maintenance5Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_5_FEATURES;
     maintenance5Features.maintenance5 =
@@ -237,19 +356,11 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
         extendedDynamicState2.extendedDynamicState2LogicOp =
             supportedExtendedDynamicState2.extendedDynamicState2LogicOp ? VK_TRUE : VK_FALSE;
 
-        // Store the flag for runtime checks
         extendedDynamicState2LogicOp_ = (extendedDynamicState2.extendedDynamicState2LogicOp == VK_TRUE);
-
-#ifdef DEBUG
-        std::cout << "[Device-Debug] extendedDynamicState2: "
-                  << (extendedDynamicState2.extendedDynamicState2 ? "YES" : "NO") << std::endl;
-        std::cout << "[Device-Debug] extendedDynamicState2LogicOp: "
-                  << (extendedDynamicState2.extendedDynamicState2LogicOp ? "YES" : "NO") << std::endl;
-#endif
 
         extendedDynamicState2.extendedDynamicState2PatchControlPoints = VK_FALSE;
     } else {
-        std::cerr << "[Device-Debug] VK_EXT_extended_dynamic_state2 NOT FOUND!" << std::endl;
+        std::cerr << "[Device] VK_EXT_extended_dynamic_state2 is unavailable" << std::endl;
     }
 
     VkPhysicalDeviceVulkan13Features vulkan13Features{};
@@ -257,11 +368,13 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     vulkan13Features.pNext = &extendedDynamicState2;
     vulkan13Features.shaderDemoteToHelperInvocation = supportedVulkan13.shaderDemoteToHelperInvocation;
     vulkan13Features.synchronization2 = supportedVulkan13.synchronization2;
+    vulkan13Features.maintenance4 = supportedVulkan13.maintenance4;
 
     VkPhysicalDeviceVulkan11Features vulkan11Features{};
     vulkan11Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
     vulkan11Features.pNext = &vulkan13Features;
     vulkan11Features.storageBuffer16BitAccess = supportedVulkan11.storageBuffer16BitAccess;
+    vulkan11Features.shaderDrawParameters = VK_TRUE;
 
     VkPhysicalDeviceVulkan12Features vulkan12Features{};
     vulkan12Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -308,7 +421,34 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     rayTracingFeatures.pNext = &accelerationStructureFeatures;
     if (hasExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
         rayTracingFeatures.rayTracingPipeline = supportedRayTracingFeatures.rayTracingPipeline;
+        rayTracingFeatures.rayTracingPipelineTraceRaysIndirect =
+            supportedRayTracingFeatures.rayTracingPipelineTraceRaysIndirect;
+        rayTracingFeatures.rayTraversalPrimitiveCulling = supportedRayTracingFeatures.rayTraversalPrimitiveCulling;
     }
+
+    void *enabledFeatureChain = &rayTracingFeatures;
+#if defined(VK_EXT_ray_tracing_invocation_reorder)
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT invocationReorderEXT{};
+    if (hasExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME) &&
+        supportedInvocationReorderEXT.rayTracingInvocationReorder) {
+        invocationReorderEXT.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
+        invocationReorderEXT.pNext = enabledFeatureChain;
+        invocationReorderEXT.rayTracingInvocationReorder = VK_TRUE;
+        enabledFeatureChain = &invocationReorderEXT;
+        shaderInvocationReorderEXT_ = true;
+    }
+#endif
+#if defined(VK_NV_ray_tracing_invocation_reorder)
+    VkPhysicalDeviceRayTracingInvocationReorderFeaturesNV invocationReorderNV{};
+    if (!shaderInvocationReorderEXT_ && hasExtension(VK_NV_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME) &&
+        supportedInvocationReorderNV.rayTracingInvocationReorder) {
+        invocationReorderNV.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_NV;
+        invocationReorderNV.pNext = enabledFeatureChain;
+        invocationReorderNV.rayTracingInvocationReorder = VK_TRUE;
+        enabledFeatureChain = &invocationReorderNV;
+        shaderInvocationReorderNV_ = true;
+    }
+#endif
 
     VkPhysicalDeviceFeatures features = {};
     features.independentBlend = supportedFeatures2.features.independentBlend;
@@ -317,15 +457,21 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     features.logicOp = supportedFeatures2.features.logicOp;
     features.fillModeNonSolid = supportedFeatures2.features.fillModeNonSolid;
     features.depthBiasClamp = supportedFeatures2.features.depthBiasClamp;
+    features.multiDrawIndirect = supportedFeatures2.features.multiDrawIndirect;
+    features.drawIndirectFirstInstance = supportedFeatures2.features.drawIndirectFirstInstance;
+    multiDrawIndirect_ = supportedFeatures2.features.multiDrawIndirect == VK_TRUE;
+    drawIndirectFirstInstance_ = supportedFeatures2.features.drawIndirectFirstInstance == VK_TRUE;
     features.shaderInt64 = supportedFeatures2.features.shaderInt64;
     features.shaderFloat64 = supportedFeatures2.features.shaderFloat64;
     features.shaderInt16 = supportedFeatures2.features.shaderInt16;
+    features.shaderStorageImageExtendedFormats = supportedFeatures2.features.shaderStorageImageExtendedFormats;
     features.shaderStorageImageReadWithoutFormat = supportedFeatures2.features.shaderStorageImageReadWithoutFormat;
     features.shaderStorageImageWriteWithoutFormat = supportedFeatures2.features.shaderStorageImageWriteWithoutFormat;
+    features.fragmentStoresAndAtomics = supportedFeatures2.features.fragmentStoresAndAtomics;
 
     VkPhysicalDeviceFeatures2 features2 = {};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &rayTracingFeatures;
+    features2.pNext = enabledFeatureChain;
     features2.features = features;
 
 #ifdef MCVR_ENABLE_XESS
@@ -339,99 +485,252 @@ vk::Device::Device(std::shared_ptr<Instance> instance,
     }
 #endif
 
-    // create logical device
-    VkDeviceCreateInfo deviceCreateInfo = {};
-    if (physicalDevice_->mainQueueIndex() == physicalDevice_->secondaryQueueIndex()) {
-        std::vector<float> queuePriorities{{1.0, 0.0}};
-        VkDeviceQueueCreateInfo queueCreateInfo = {};
-        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfo.queueFamilyIndex = physicalDevice_->mainQueueIndex();
-        queueCreateInfo.queueCount = 2;
-        queueCreateInfo.pQueuePriorities = queuePriorities.data();
-
-        deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
-        deviceCreateInfo.queueCreateInfoCount = 1;
-        deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(filteredExtensions.size());
-        deviceCreateInfo.ppEnabledExtensionNames = filteredExtensions.data();
-        deviceCreateInfo.pNext = &features2;
-        deviceCreateInfo.pEnabledFeatures = nullptr;
-
-        if (vkCreateDevice(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_) != VK_SUCCESS) {
-            deviceCerr() << "Failed to create logical device!" << std::endl;
-            exit(EXIT_FAILURE);
-        }
-    } else {
-        std::vector<float> queuePriorities{{1.0, 0.0}};
-        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos(2);
-        queueCreateInfos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfos[0].queueFamilyIndex = physicalDevice_->mainQueueIndex();
-        queueCreateInfos[0].queueCount = 1;
-        queueCreateInfos[0].pQueuePriorities = &queuePriorities[0];
-
-        queueCreateInfos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueCreateInfos[1].queueFamilyIndex = physicalDevice_->secondaryQueueIndex();
-        queueCreateInfos[1].queueCount = 1;
-        queueCreateInfos[1].pQueuePriorities = &queuePriorities[1];
-
-        deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        deviceCreateInfo.queueCreateInfoCount = queueCreateInfos.size();
-        deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
-        deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(filteredExtensions.size());
-        deviceCreateInfo.ppEnabledExtensionNames = filteredExtensions.data();
-        deviceCreateInfo.pNext = &features2;
-        deviceCreateInfo.pEnabledFeatures = nullptr;
-
-        if (vkCreateDevice(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_) != VK_SUCCESS) {
-            deviceCerr() << "Failed to create logical device!" << std::endl;
-            exit(EXIT_FAILURE);
-        }
+    independentSecondaryQueue_ = physicalDevice_->hasIndependentSecondaryQueue();
+    uint32_t queueFamilyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_->vkPhysicalDevice(), &queueFamilyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice_->vkPhysicalDevice(), &queueFamilyCount,
+                                             queueFamilies.data());
+    const uint32_t mainFamily = physicalDevice_->mainQueueIndex();
+    const uint32_t secondaryFamily = physicalDevice_->secondaryQueueIndex();
+    const uint32_t secondaryOffset = physicalDevice_->secondaryQueueOffset();
+    uint32_t asyncOffset = secondaryOffset;
+    if (independentSecondaryQueue_ && queueFamilies[secondaryFamily].queueCount > secondaryOffset + 1) {
+        asyncOffset = secondaryOffset + 1;
     }
+    std::vector<float> mainPriorities(mainFamily == secondaryFamily ? asyncOffset + 1 : 1, 1.0f);
+    std::vector<float> secondaryPriorities(asyncOffset + 1, 1.0f);
+    if (independentSecondaryQueue_) {
+        (mainFamily == secondaryFamily ? mainPriorities : secondaryPriorities)[secondaryOffset] = 0.0f;
+    }
+    const uint32_t presentOffset = static_cast<uint32_t>(mainPriorities.size());
+    const bool independentPresentQueue = queueFamilies[mainFamily].queueCount > presentOffset;
+    if (independentPresentQueue) { mainPriorities.push_back(1.0f); }
+    std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+    VkDeviceQueueCreateInfo mainQueueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    mainQueueInfo.queueFamilyIndex = mainFamily;
+    mainQueueInfo.queueCount = static_cast<uint32_t>(mainPriorities.size());
+    mainQueueInfo.pQueuePriorities = mainPriorities.data();
+    queueCreateInfos.push_back(mainQueueInfo);
+    if (secondaryFamily != mainFamily) {
+        VkDeviceQueueCreateInfo secondaryQueueInfo{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+        secondaryQueueInfo.queueFamilyIndex = secondaryFamily;
+        secondaryQueueInfo.queueCount = static_cast<uint32_t>(secondaryPriorities.size());
+        secondaryQueueInfo.pQueuePriorities = secondaryPriorities.data();
+        queueCreateInfos.push_back(secondaryQueueInfo);
+    }
+    VkDeviceCreateInfo deviceCreateInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    deviceCreateInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+    deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
+    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(filteredExtensions.size());
+    deviceCreateInfo.ppEnabledExtensionNames = filteredExtensions.data();
+    deviceCreateInfo.pNext = &features2;
+    vk::requireSuccess(vkCreateDevice(physicalDevice_->vkPhysicalDevice(), &deviceCreateInfo, nullptr, &device_),
+                       "vkCreateDevice");
 
     volkLoadDevice(device_);
-
-#ifdef DEBUG
-    deviceCout() << "Logical device created successfully!" << std::endl;
-#endif
+    initPipelineCache();
 
     vkGetDeviceQueue(device_, physicalDevice_->mainQueueIndex(), 0, &mainQueue_);
-    vkGetDeviceQueue(device_, physicalDevice_->secondaryQueueIndex(),
-                     physicalDevice_->mainQueueIndex() == physicalDevice_->secondaryQueueIndex() ? 1 : 0,
-                     &secondaryQueue_);
+    if (independentPresentQueue) {
+        vkGetDeviceQueue(device_, mainFamily, presentOffset, &presentQueue_);
+    } else {
+        presentQueue_ = mainQueue_;
+    }
+    if (independentSecondaryQueue_) {
+        vkGetDeviceQueue(device_, physicalDevice_->secondaryQueueIndex(), physicalDevice_->secondaryQueueOffset(),
+                         &secondaryQueue_);
+    } else {
+        secondaryQueue_ = mainQueue_;
+    }
+    vkGetDeviceQueue(device_, secondaryFamily, asyncOffset, &asyncComputeQueue_);
 }
 
 vk::Device::~Device() {
     if (device_ != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(device_);
+        VkResult waitResult = vkDeviceWaitIdle(device_);
+        if (waitResult != VK_SUCCESS) {
+            deviceCerr() << "vkDeviceWaitIdle during shutdown failed (" << vk::resultName(waitResult) << ", "
+                         << static_cast<int32_t>(waitResult) << ")" << std::endl;
+        }
+        savePipelineCache();
+        if (pipelineCache_ != VK_NULL_HANDLE) { vkDestroyPipelineCache(device_, pipelineCache_, nullptr); }
         vkDestroyDevice(device_, nullptr);
         device_ = VK_NULL_HANDLE;
     }
-
-#ifdef DEBUG
-    deviceCout() << "device deconstructed" << std::endl;
-#endif
 }
 
 VkDevice &vk::Device::vkDevice() {
     return device_;
 }
 
+void vk::Device::initPipelineCache() {
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physicalDevice_->vkPhysicalDevice(), &properties);
+    std::ostringstream name;
+    name << std::hex << properties.vendorID << '-' << properties.deviceID << '-' << properties.driverVersion << '-';
+    for (uint8_t byte : properties.pipelineCacheUUID) {
+        name << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte);
+    }
+    if (!Renderer::folderPath.empty()) {
+        pipelineCachePath_ = Renderer::folderPath / "cache/pipelines" / (name.str() + ".bin");
+    }
+    std::vector<char> data;
+    std::ifstream input(pipelineCachePath_, std::ios::binary | std::ios::ate);
+    if (input) {
+        const auto size = input.tellg();
+        if (size >= static_cast<std::streamoff>(sizeof(VkPipelineCacheHeaderVersionOne)) && size <= 256 * 1024 * 1024) {
+            data.resize(static_cast<size_t>(size));
+            input.seekg(0);
+            if (!input.read(data.data(), data.size())) { data.clear(); }
+        }
+    }
+    if (!data.empty()) {
+        VkPipelineCacheHeaderVersionOne header{};
+        std::memcpy(&header, data.data(), sizeof(header));
+        if (header.headerSize != sizeof(header) || header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+            header.vendorID != properties.vendorID || header.deviceID != properties.deviceID ||
+            std::memcmp(header.pipelineCacheUUID, properties.pipelineCacheUUID, VK_UUID_SIZE) != 0) {
+            data.clear();
+        }
+    }
+    VkPipelineCacheCreateInfo info{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    info.initialDataSize = data.size();
+    info.pInitialData = data.empty() ? nullptr : data.data();
+    VkResult result = vkCreatePipelineCache(device_, &info, nullptr, &pipelineCache_);
+    if (result != VK_SUCCESS && !data.empty()) {
+        info.initialDataSize = 0;
+        info.pInitialData = nullptr;
+        result = vkCreatePipelineCache(device_, &info, nullptr, &pipelineCache_);
+    }
+    if (result != VK_SUCCESS) {
+        pipelineCache_ = VK_NULL_HANDLE;
+        deviceCerr() << "Pipeline cache unavailable: " << vk::resultName(result) << std::endl;
+    }
+}
+
+VkPipelineCache vk::Device::vkPipelineCache() const {
+    return pipelineCache_;
+}
+
+void vk::Device::savePipelineCache() {
+    if (pipelineCache_ == VK_NULL_HANDLE || pipelineCachePath_.empty()) { return; }
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, nullptr) != VK_SUCCESS || size == 0 ||
+        size > 256 * 1024 * 1024) {
+        return;
+    }
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device_, pipelineCache_, &size, data.data()) != VK_SUCCESS) { return; }
+    std::error_code error;
+    std::filesystem::create_directories(pipelineCachePath_.parent_path(), error);
+    if (error) { return; }
+    auto temporaryPath = pipelineCachePath_;
+    temporaryPath += "." + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".tmp";
+    {
+        std::ofstream output(temporaryPath, std::ios::binary | std::ios::trunc);
+        output.write(data.data(), size);
+        output.close();
+        if (!output) {
+            std::filesystem::remove(temporaryPath, error);
+            return;
+        }
+    }
+#ifdef _WIN32
+    if (MoveFileExW(temporaryPath.c_str(), pipelineCachePath_.c_str(), MOVEFILE_REPLACE_EXISTING) != 0) { return; }
+#else
+    std::filesystem::rename(temporaryPath, pipelineCachePath_, error);
+    if (!error) { return; }
+#endif
+    std::filesystem::remove(temporaryPath, error);
+}
+
 VkQueue &vk::Device::mainVkQueue() {
     return mainQueue_;
+}
+
+VkQueue &vk::Device::presentQueue() {
+    return presentQueue_;
 }
 
 VkQueue &vk::Device::secondaryQueue() {
     return secondaryQueue_;
 }
 
+VkQueue &vk::Device::asyncComputeQueue() {
+    return asyncComputeQueue_;
+}
+
+uint32_t vk::Device::mainQueueFamilyIndex() const {
+    return physicalDevice_->mainQueueIndex();
+}
+
+uint32_t vk::Device::secondaryQueueFamilyIndex() const {
+    return physicalDevice_->secondaryQueueIndex();
+}
+
+bool vk::Device::hasIndependentSecondaryQueue() const {
+    return independentSecondaryQueue_;
+}
+
+std::recursive_mutex &vk::Device::mainQueueMutex() {
+    return mainQueueMutex_;
+}
+
+std::recursive_mutex &vk::Device::presentQueueMutex() {
+    return presentQueue_ == mainQueue_ ? mainQueueMutex_ : presentQueueMutex_;
+}
+
+std::recursive_mutex &vk::Device::secondaryQueueMutex() {
+    return independentSecondaryQueue_ ? secondaryQueueMutex_ : mainQueueMutex_;
+}
+
+std::recursive_mutex &vk::Device::asyncComputeQueueMutex() {
+    if (asyncComputeQueue_ == mainQueue_) { return mainQueueMutex_; }
+    if (asyncComputeQueue_ == secondaryQueue_) { return secondaryQueueMutex(); }
+    return asyncComputeQueueMutex_;
+}
+
 bool vk::Device::hasExtendedDynamicState2LogicOp() const {
     return extendedDynamicState2LogicOp_;
 }
 
-bool vk::Device::isDlssDeviceExtensionsCompatible() const {
-    return dlssDeviceExtensionsCompatible_;
+bool vk::Device::hasMultiDrawIndirect() const {
+    return multiDrawIndirect_;
+}
+
+bool vk::Device::hasDrawIndirectFirstInstance() const {
+    return drawIndirectFirstInstance_;
+}
+
+bool vk::Device::hasShaderInvocationReorderEXT() const {
+    return shaderInvocationReorderEXT_;
+}
+
+bool vk::Device::hasShaderInvocationReorderNV() const {
+    return shaderInvocationReorderNV_;
+}
+
+bool vk::Device::isDlssRRDeviceExtensionsCompatible() const {
+    return dlssRRDeviceExtensionsCompatible_;
+}
+
+bool vk::Device::isDlssSRDeviceExtensionsCompatible() const {
+    return dlssSRDeviceExtensionsCompatible_;
+}
+
+bool vk::Device::isDlssFrameGenerationDeviceExtensionsCompatible() const {
+    return dlssFrameGenerationDeviceExtensionsCompatible_;
+}
+
+bool vk::Device::isFsrFrameGenerationDeviceExtensionsCompatible() const {
+    return fsrFrameGenerationDeviceExtensionsCompatible_;
 }
 
 bool vk::Device::isXessDeviceExtensionsCompatible() const {
     return xessDeviceExtensionsCompatible_;
+}
+
+bool vk::Device::hasMemoryBudget() const {
+    return memoryBudgetEnabled_;
 }

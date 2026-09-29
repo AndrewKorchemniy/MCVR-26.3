@@ -4,15 +4,12 @@
 #include "core/vulkan/buffer.hpp"
 #include "core/vulkan/command.hpp"
 #include "core/vulkan/device.hpp"
+#include "core/vulkan/resource_memory_tracker.hpp"
+#include "core/vulkan/result.hpp"
 #include "core/vulkan/vma.hpp"
 
 #include <cstring>
 #include <iostream>
-#include <sstream>
-
-std::ostream &imageCout() {
-    return std::cout << "[Image] ";
-}
 
 std::ostream &imageCerr() {
     return std::cerr << "[Image] ";
@@ -63,7 +60,9 @@ vk::SwapchainImage::SwapchainImage(
 }
 
 vk::SwapchainImage::~SwapchainImage() {
-    for (int i = 0; i < imageViews_.size(); i++) { vkDestroyImageView(device_->vkDevice(), imageViews_[0], nullptr); }
+    for (auto imageView : imageViews_) {
+        if (imageView != VK_NULL_HANDLE) { vkDestroyImageView(device_->vkDevice(), imageView, nullptr); }
+    }
 }
 
 uint32_t vk::SwapchainImage::width() {
@@ -98,28 +97,62 @@ VkImageLayout &vk::SwapchainImage::imageLayout() {
     return imageLayout_;
 }
 
+VkImageSubresourceRange vk::SwapchainImage::fullSubresourceRange() const {
+    return wholeColorSubresourceRange;
+}
+
 size_t vk::formatToByte(VkFormat format) {
     switch (format) {
-        // 1 byte
         case VK_FORMAT_R8_UNORM:
         case VK_FORMAT_R8_SNORM:
+        case VK_FORMAT_R8_USCALED:
+        case VK_FORMAT_R8_SSCALED:
         case VK_FORMAT_R8_UINT:
-        case VK_FORMAT_R8_SINT: return 1;
+        case VK_FORMAT_R8_SINT:
+        case VK_FORMAT_R8_SRGB: return 1;
 
-        // 2 bytes
         case VK_FORMAT_R8G8_UNORM:
         case VK_FORMAT_R8G8_SNORM:
+        case VK_FORMAT_R8G8_USCALED:
+        case VK_FORMAT_R8G8_SSCALED:
         case VK_FORMAT_R8G8_UINT:
         case VK_FORMAT_R8G8_SINT:
+        case VK_FORMAT_R8G8_SRGB:
         case VK_FORMAT_R16_UNORM:
         case VK_FORMAT_R16_SNORM:
+        case VK_FORMAT_R16_USCALED:
+        case VK_FORMAT_R16_SSCALED:
         case VK_FORMAT_R16_UINT:
         case VK_FORMAT_R16_SINT:
         case VK_FORMAT_R16_SFLOAT: return 2;
 
-        // 4 bytes
+        case VK_FORMAT_R8G8B8_UNORM:
+        case VK_FORMAT_R8G8B8_SNORM:
+        case VK_FORMAT_R8G8B8_USCALED:
+        case VK_FORMAT_R8G8B8_SSCALED:
+        case VK_FORMAT_R8G8B8_UINT:
+        case VK_FORMAT_R8G8B8_SINT:
+        case VK_FORMAT_R8G8B8_SRGB:
+        case VK_FORMAT_B8G8R8_UNORM:
+        case VK_FORMAT_B8G8R8_SNORM:
+        case VK_FORMAT_B8G8R8_USCALED:
+        case VK_FORMAT_B8G8R8_SSCALED:
+        case VK_FORMAT_B8G8R8_UINT:
+        case VK_FORMAT_B8G8R8_SINT:
+        case VK_FORMAT_B8G8R8_SRGB: return 3;
+
+        case VK_FORMAT_R16G16B16_UNORM:
+        case VK_FORMAT_R16G16B16_SNORM:
+        case VK_FORMAT_R16G16B16_USCALED:
+        case VK_FORMAT_R16G16B16_SSCALED:
+        case VK_FORMAT_R16G16B16_UINT:
+        case VK_FORMAT_R16G16B16_SINT:
+        case VK_FORMAT_R16G16B16_SFLOAT: return 6;
+
         case VK_FORMAT_R8G8B8A8_UNORM:
         case VK_FORMAT_R8G8B8A8_SNORM:
+        case VK_FORMAT_R8G8B8A8_USCALED:
+        case VK_FORMAT_R8G8B8A8_SSCALED:
         case VK_FORMAT_R8G8B8A8_UINT:
         case VK_FORMAT_R8G8B8A8_SINT:
         case VK_FORMAT_R8G8B8A8_SRGB:
@@ -130,6 +163,8 @@ size_t vk::formatToByte(VkFormat format) {
         case VK_FORMAT_B8G8R8A8_SRGB:
         case VK_FORMAT_R16G16_UNORM:
         case VK_FORMAT_R16G16_SNORM:
+        case VK_FORMAT_R16G16_USCALED:
+        case VK_FORMAT_R16G16_SSCALED:
         case VK_FORMAT_R16G16_UINT:
         case VK_FORMAT_R16G16_SINT:
         case VK_FORMAT_R16G16_SFLOAT:
@@ -140,9 +175,10 @@ size_t vk::formatToByte(VkFormat format) {
         case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         case VK_FORMAT_D32_SFLOAT: return 4;
 
-        // 8 bytes
         case VK_FORMAT_R16G16B16A16_UNORM:
         case VK_FORMAT_R16G16B16A16_SNORM:
+        case VK_FORMAT_R16G16B16A16_USCALED:
+        case VK_FORMAT_R16G16B16A16_SSCALED:
         case VK_FORMAT_R16G16B16A16_UINT:
         case VK_FORMAT_R16G16B16A16_SINT:
         case VK_FORMAT_R16G16B16A16_SFLOAT:
@@ -150,12 +186,10 @@ size_t vk::formatToByte(VkFormat format) {
         case VK_FORMAT_R32G32_SINT:
         case VK_FORMAT_R32G32_SFLOAT: return 8;
 
-        // 12 bytes
         case VK_FORMAT_R32G32B32_UINT:
         case VK_FORMAT_R32G32B32_SINT:
         case VK_FORMAT_R32G32B32_SFLOAT: return 12;
 
-        // 16 bytes
         case VK_FORMAT_R32G32B32A32_UINT:
         case VK_FORMAT_R32G32B32A32_SINT:
         case VK_FORMAT_R32G32B32A32_SFLOAT: return 16;
@@ -285,7 +319,6 @@ vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
       ) {
 }
 
-
 vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
                                        std::shared_ptr<VMA> vma,
                                        bool persistStaging,
@@ -406,15 +439,7 @@ vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
         exit(EXIT_FAILURE);
     }
 
-#ifdef DEBUG
-    imageCout() << "Creating image with width: " << width << " height: " << height << " depth: " << depth
-                << " layer: " << layer
-                << " channel: " << vk::formatToByte(format) << " mip level: " << mipLevels
-                << " staging: " << (persistStaging ? "enabled" : "disabled") << std::endl;
-#endif
-
     if (persistStaging_) {
-        // staging buffer
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = imageByteSize(width_, height_, depth_, layer_, format_);
@@ -425,15 +450,13 @@ vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
         allocationInfo.flags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-        if (vmaCreateBuffer(vma_->allocator(), &bufferInfo, &allocationInfo, &stagingBuffer_, &stagingAllocation_,
-                            &stagingAllocationInfo_) != VK_SUCCESS) {
-            imageCerr() << "failed to create staging buffer" << std::endl;
-            exit(EXIT_FAILURE);
-        }
+        vk::requireSuccess(vmaCreateBuffer(vma_->allocator(), &bufferInfo, &allocationInfo, &stagingBuffer_,
+                                           &stagingAllocation_, &stagingAllocationInfo_),
+                           "vmaCreateBuffer(image staging buffer)");
+        trackVmaAllocation(vma_->allocator(), stagingAllocation_, memoryCategory_);
         mappedPtr_ = stagingAllocationInfo_.pMappedData;
     }
 
-    // image
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.flags = imageCreateFlags;
@@ -445,16 +468,22 @@ vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
     imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | usage_;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    const uint32_t queueFamilies[] = {device_->mainQueueFamilyIndex(), device_->secondaryQueueFamilyIndex()};
+    if (queueFamilies[0] != queueFamilies[1] &&
+        (usage_ & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT)) != 0) {
+        imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        imageInfo.queueFamilyIndexCount = 2;
+        imageInfo.pQueueFamilyIndices = queueFamilies;
+    }
     imageLayout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocationInfo{};
     allocationInfo.flags = allocationFlags_;
     allocationInfo.usage = vmaUsage;
-    if (vmaCreateImage(vma_->allocator(), &imageInfo, &allocationInfo, &image_, &allocation_, &allocationInfo_) !=
-        VK_SUCCESS) {
-        imageCerr() << "failed to create image" << std::endl;
-        exit(EXIT_FAILURE);
-    }
+    vk::requireSuccess(
+        vmaCreateImage(vma_->allocator(), &imageInfo, &allocationInfo, &image_, &allocation_, &allocationInfo_),
+        "vmaCreateImage(device-local image)");
+    trackVmaAllocation(vma_->allocator(), allocation_, memoryCategory_);
 
     VkImageViewCreateInfo createInfo = {};
     auto makeDefaultImageViewType = [](uint32_t depth, uint32_t layer) {
@@ -471,24 +500,16 @@ vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
     createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
     createInfo.subresourceRange = makeImageSubresourceRange(imageAspectMask(usage_), mipLevels_, depth_, layer_);
 
-    if (vkCreateImageView(device_->vkDevice(), &createInfo, nullptr, &imageViews_[0]) != VK_SUCCESS) {
-        imageCerr() << "failed to create image view for image" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-
-#ifdef DEBUG
-    imageCout() << "device local image (" << debugName << ") init" << std::endl;
-#endif
+    vk::requireSuccess(vkCreateImageView(device_->vkDevice(), &createInfo, nullptr, &imageViews_[0]),
+                       "vkCreateImageView(device-local image)");
 }
 
 vk::DeviceLocalImage::~DeviceLocalImage() {
     for (int i = 0; i < imageViews_.size(); i++) { vkDestroyImageView(device_->vkDevice(), imageViews_[i], nullptr); }
+    untrackVmaAllocation(vma_->allocator(), stagingAllocation_, memoryCategory_);
+    untrackVmaAllocation(vma_->allocator(), allocation_, memoryCategory_);
     vmaDestroyBuffer(vma_->allocator(), stagingBuffer_, stagingAllocation_);
     vmaDestroyImage(vma_->allocator(), image_, allocation_);
-
-#ifdef DEBUG
-    imageCout() << "device local image (" << debugName << ") deconstructed" << std::endl;
-#endif
 }
 
 void vk::DeviceLocalImage::uploadToStagingBuffer(void *src) {
@@ -498,7 +519,6 @@ void vk::DeviceLocalImage::uploadToStagingBuffer(void *src) {
             exit(EXIT_FAILURE);
         }
 
-        // staging buffer
         VkBufferCreateInfo bufferInfo = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bufferInfo.size = imageByteSize(width_, height_, depth_, layer_, format_);
         bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
@@ -508,22 +528,19 @@ void vk::DeviceLocalImage::uploadToStagingBuffer(void *src) {
         allocationInfo.flags =
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
-        if (vmaCreateBuffer(vma_->allocator(), &bufferInfo, &allocationInfo, &stagingBuffer_, &stagingAllocation_,
-                            &stagingAllocationInfo_) != VK_SUCCESS) {
-            imageCerr() << "failed to create staging buffer" << std::endl;
-            exit(EXIT_FAILURE);
-        }
+        vk::requireSuccess(vmaCreateBuffer(vma_->allocator(), &bufferInfo, &allocationInfo, &stagingBuffer_,
+                                           &stagingAllocation_, &stagingAllocationInfo_),
+                           "vmaCreateBuffer(transient image staging buffer)");
+        trackVmaAllocation(vma_->allocator(), stagingAllocation_, memoryCategory_);
         mappedPtr_ = stagingAllocationInfo_.pMappedData;
     }
 
     size_t size = imageByteSize(width_, height_, depth_, layer_, format_);
-#ifdef DEBUG
-    imageCout() << "Flushed " << size << " bytes into staging buffer" << std::endl;
-#endif
     std::memcpy(mappedPtr_, src, size);
     vmaFlushAllocation(vma_->allocator(), stagingAllocation_, 0, size);
 
     if (!persistStaging_) {
+        untrackVmaAllocation(vma_->allocator(), stagingAllocation_, memoryCategory_);
         vmaDestroyBuffer(vma_->allocator(), stagingBuffer_, stagingAllocation_);
         stagingBuffer_ = VK_NULL_HANDLE;
         stagingAllocation_ = VK_NULL_HANDLE;
@@ -542,6 +559,7 @@ void vk::DeviceLocalImage::uploadToImage(VkCommandBuffer cmdBuffer) {
 }
 
 void vk::DeviceLocalImage::uploadToImage(std::shared_ptr<CommandBuffer> cmdBuffer) {
+    cmdBuffer->retainResource(shared_from_this());
     uploadToImage(cmdBuffer->vkCommandBuffer());
 }
 
@@ -555,6 +573,8 @@ void vk::DeviceLocalImage::uploadToImage(VkCommandBuffer cmdBuffer,
 void vk::DeviceLocalImage::uploadToImage(std::shared_ptr<CommandBuffer> cmdBuffer,
                                          std::shared_ptr<Buffer> buffer,
                                          std::vector<VkBufferImageCopy> &regions) {
+    cmdBuffer->retainResource(shared_from_this());
+    cmdBuffer->retainResource(buffer);
     uploadToImage(cmdBuffer->vkCommandBuffer(), buffer, regions);
 }
 
@@ -611,6 +631,12 @@ void vk::DeviceLocalImage::addImageView(VkImageViewCreateInfo info) {
     imageViews_.push_back(vkImageView);
 }
 
+void vk::DeviceLocalImage::setMemoryCategory(ResourceMemoryCategory category) {
+    retagVmaAllocation(vma_->allocator(), allocation_, memoryCategory_, category);
+    retagVmaAllocation(vma_->allocator(), stagingAllocation_, memoryCategory_, category);
+    memoryCategory_ = category;
+}
+
 vk::Sampler::Sampler(std::shared_ptr<Device> device)
     : Sampler(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_LINEAR, VK_SAMPLER_ADDRESS_MODE_REPEAT) {}
 
@@ -618,24 +644,39 @@ vk::Sampler::Sampler(std::shared_ptr<Device> device,
                      VkFilter samplingMode,
                      VkSamplerMipmapMode mipmapMode,
                      VkSamplerAddressMode addressMode)
-    : device_(device), samplingMode_(samplingMode), mipmapMode_(mipmapMode), addressMode_(addressMode) {
+    : Sampler(device, samplingMode, mipmapMode, addressMode, false, VK_COMPARE_OP_ALWAYS) {}
+
+vk::Sampler::Sampler(std::shared_ptr<Device> device,
+                     VkFilter samplingMode,
+                     VkSamplerMipmapMode mipmapMode,
+                     VkSamplerAddressMode addressMode,
+                     bool compareEnable,
+                     VkCompareOp compareOp)
+    : device_(device),
+      samplingMode_(samplingMode),
+      mipmapMode_(mipmapMode),
+      addressMode_(addressMode),
+      compareEnable_(compareEnable),
+      compareOp_(compareOp) {
     VkSamplerCreateInfo samplerInfo = {};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    samplerInfo.magFilter = samplingMode;                       // 放大时的过滤方式
-    samplerInfo.minFilter = samplingMode;                       // 缩小时的过滤方式
-    samplerInfo.addressModeU = addressMode;                     // U方向寻址
-    samplerInfo.addressModeV = addressMode;                     // V方向寻址
-    samplerInfo.addressModeW = addressMode;                     // W方向寻址
-    samplerInfo.anisotropyEnable = VK_FALSE;                    // 先不启用各向异性过滤
-    samplerInfo.maxAnisotropy = 16.0f;                          // 最大各向异性采样数
-    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK; // 边界色
-    samplerInfo.unnormalizedCoordinates = VK_FALSE;             // 使用标准化坐标 [0,1]
-    samplerInfo.compareEnable = VK_FALSE;                       // 禁用深度比较
+    samplerInfo.magFilter = samplingMode;
+    samplerInfo.minFilter = samplingMode;
+    samplerInfo.addressModeU = addressMode;
+    samplerInfo.addressModeV = addressMode;
+    samplerInfo.addressModeW = addressMode;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 16.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
-    samplerInfo.mipmapMode = mipmapMode;    // mipmap插值
-    samplerInfo.mipLodBias = 0.0f;          // mipmap偏移
-    samplerInfo.minLod = 0.0f;              // 最小mip层级
-    samplerInfo.maxLod = VK_LOD_CLAMP_NONE; // 最大mip层级（无限制）
+    samplerInfo.compareEnable = compareEnable ? VK_TRUE : VK_FALSE;
+    samplerInfo.compareOp = compareOp;
+    samplerInfo.mipmapMode = mipmapMode;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
 
     if (vkCreateSampler(device->vkDevice(), &samplerInfo, nullptr, &samper_) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create sampler!");
@@ -662,15 +703,10 @@ VkSamplerAddressMode vk::Sampler::vkAddressMode() {
     return addressMode_;
 }
 
-std::ostream &imageLoaderCout() {
-    return std::cout << "[ImageLoader] ";
-}
-
 std::ostream &imageLoaderCerr() {
     return std::cerr << "[ImageLoader] ";
 }
 
-// 0~1 float
 float linearToSrgb(float linear) {
     if (linear <= 0.0031308f) {
         return 12.92f * linear;
@@ -679,7 +715,6 @@ float linearToSrgb(float linear) {
     }
 }
 
-// 0~255 uint8_t
 uint8_t linearToSrgb(uint8_t linear) {
     if (linear / 255.0f <= 0.0031308f) {
         return 12.92f * linear;
@@ -697,10 +732,6 @@ vk::ImageLoader::ImageLoader(std::vector<std::string> imagePaths, uint32_t force
         int channel;
         if (i == 0) {
             imageData = stbi_load(imagePaths_[i].c_str(), &width_, &height_, &channel, 0);
-#ifdef DEBUG
-            imageLoaderCout() << "Loaded image from " << imagePaths_[i] << " with width: " << width_
-                              << " height: " << height_ << " channel: " << channel << std::endl;
-#endif
         } else {
             int currentWidth, currentHeight;
             imageData = stbi_load(imagePaths_[i].c_str(), &currentWidth, &currentHeight, &channel, 0);
@@ -711,10 +742,6 @@ vk::ImageLoader::ImageLoader(std::vector<std::string> imagePaths, uint32_t force
                 imageLoaderCerr() << "existing: [width=" << width_ << ", height=" << height_ << "]" << std::endl;
                 exit(EXIT_FAILURE);
             }
-#ifdef DEBUG
-            imageLoaderCout() << "Loaded image from " << imagePaths_[i] << " with width: " << currentWidth
-                              << " height: " << currentHeight << " channel: " << channel << std::endl;
-#endif
         }
 
         if (forceChannel < channel) {
@@ -725,8 +752,7 @@ vk::ImageLoader::ImageLoader(std::vector<std::string> imagePaths, uint32_t force
         for (int h = 0; h < height_; h++) {
             for (int w = 0; w < width_; w++) {
                 const int srcIndex = (h * width_ + w) * channel;
-                for (int c = 0; c < std::min(channel, 3);
-                     c++) { // only do linear to srgb transform for color, not alpha
+                for (int c = 0; c < std::min(channel, 3); c++) {
                     uint8_t value = imageData[srcIndex + c];
                     data_.push_back(convertLinearToSrgb ? linearToSrgb(value) : value);
                 }

@@ -1,0 +1,164 @@
+#version 460
+
+#define NUM_BINS 256
+#define BIN_WEIGHT_SCALE 64.0
+const uint RESET_TONE_CURVE = 1u << 4u;
+const uint MANUAL_EXPOSURE = 1u << 0u;
+const float MAX_TOTAL_LIFT_EV = 2.75;
+const float NIGHT_MAX_TOTAL_LIFT_EV = 2.75;
+
+layout(set = 0, binding = 1, r32ui) uniform uimage2D luminanceDistributionImage;
+layout(std430, set = 0, binding = 2) readonly buffer ToneMappingStateBuffer {
+    float exposureEv;
+    float measuredLogLuminance;
+    uint frameSerial;
+    uint valid;
+}
+toneMappingState;
+layout(set = 0, binding = 4, r32f) uniform image2D toneCurveImage;
+
+layout(push_constant) uniform PushConstant {
+    float logLuminanceMin;
+    float logLuminanceMax;
+    float deltaTimeSec;
+    float exposureCeiling;
+    float targetLuminance;
+    float meteringResponse;
+    float skyMeterWeight;
+    float emissiveMeterWeight;
+    float manualExposureEv;
+    float chromaPreservation;
+    float outputContrastRange;
+    float shadowDetailFloor;
+    float shadowContrast;
+    float shadowPivot;
+    float outputOffsetEv;
+    float curveLiftLimit;
+    uint flags;
+    float nightFactor;
+}
+pc;
+
+layout(local_size_x = NUM_BINS, local_size_y = 1, local_size_z = 1) in;
+
+shared float localData[NUM_BINS];
+
+bool flagSet(uint bit) {
+    return (pc.flags & bit) != 0u;
+}
+
+float effectiveCurveLiftLimit() {
+    float configuredLimit = max(pc.curveLiftLimit, 0.0);
+    float exposureEv = toneMappingState.valid != 0u ? toneMappingState.exposureEv :
+                       (flagSet(MANUAL_EXPOSURE) ? pc.manualExposureEv : 0.0);
+    if (isnan(exposureEv) || isinf(exposureEv)) { exposureEv = 0.0; }
+    float exposureLift = max(exposureEv, 0.0);
+    float globalCurveLimit = max(MAX_TOTAL_LIFT_EV - exposureLift, 0.0);
+    float effectiveLimit = min(configuredLimit, globalCurveLimit);
+    if (flagSet(MANUAL_EXPOSURE) || toneMappingState.valid == 0u) { return effectiveLimit; }
+    float nightFactor = clamp(pc.nightFactor, 0.0, 1.0);
+    float nightCurveLimit = max(NIGHT_MAX_TOTAL_LIFT_EV - exposureLift, 0.0);
+    return mix(effectiveLimit, min(effectiveLimit, nightCurveLimit), nightFactor);
+}
+
+float binLogLuminance(uint binIndex) {
+    return pc.logLuminanceMin + float(binIndex) * (pc.logLuminanceMax - pc.logLuminanceMin) / float(NUM_BINS);
+}
+
+float computeSharedSum(float value, uint linearIndex) {
+    float partialSum = value;
+    localData[linearIndex] = partialSum;
+    barrier();
+    for (uint stride = NUM_BINS / 2u; stride > 0u; stride >>= 1u) {
+        if (linearIndex < stride) {
+            partialSum += localData[linearIndex + stride];
+            localData[linearIndex] = partialSum;
+        }
+        barrier();
+    }
+    float result = localData[0];
+    barrier();
+    return result;
+}
+
+float computePrefixSum(float value, uint linearIndex) {
+    localData[linearIndex] = value;
+    barrier();
+    float runningSum = value;
+    for (uint offset = 1u; offset < NUM_BINS; offset <<= 1u) {
+        float addend = linearIndex >= offset ? localData[linearIndex - offset] : 0.0;
+        barrier();
+        runningSum += addend;
+        localData[linearIndex] = runningSum;
+        barrier();
+    }
+    float result = runningSum;
+    barrier();
+    return result;
+}
+
+float computeSlopes(
+    float histogramValue, uint minBin, uint maxBinExclusive, float minLogOutput, float maxLogOutput, uint linearIndex) {
+    float hist = (linearIndex < minBin || linearIndex >= maxBinExclusive) ? 0.0 : histogramValue;
+    float histSum = computeSharedSum(hist, linearIndex);
+    hist /= max(histSum, 1e-6);
+
+    float delta = (pc.logLuminanceMax - pc.logLuminanceMin) / float(NUM_BINS);
+    float rangeOverDelta = (maxLogOutput - minLogOutput) / max(delta, 1e-6);
+    float reciprocalHist = hist > 0.0 ? 1.0 / hist : 0.0;
+
+    float threshold = 1e-16;
+    float thresholdPassed = 0.0;
+    float lengthOmega = float(NUM_BINS);
+    float sumReciprocal = 0.0;
+    for (uint iteration = 0u; iteration < 16u; ++iteration) {
+        thresholdPassed = step(threshold, hist);
+        lengthOmega = computeSharedSum(thresholdPassed, linearIndex);
+        sumReciprocal = computeSharedSum(reciprocalHist * thresholdPassed, linearIndex);
+        threshold = (lengthOmega - rangeOverDelta) / max(sumReciprocal, 1e-6);
+    }
+
+    thresholdPassed = step(threshold, hist);
+    lengthOmega = computeSharedSum(thresholdPassed, linearIndex);
+    sumReciprocal = computeSharedSum(reciprocalHist * thresholdPassed, linearIndex);
+    return (1.0 + reciprocalHist * (rangeOverDelta - lengthOmega) / max(sumReciprocal, 1e-6)) * thresholdPassed;
+}
+
+void main() {
+    uint linearIndex = gl_LocalInvocationID.x;
+    float binLog = binLogLuminance(linearIndex);
+    float histogramValue =
+        float(imageLoad(luminanceDistributionImage, ivec2(int(linearIndex), 0)).r) / BIN_WEIGHT_SCALE;
+    float originalHistogram = linearIndex == 0u ? 0.0 : 1.0 + histogramValue;
+    float delta = (pc.logLuminanceMax - pc.logLuminanceMin) / float(NUM_BINS);
+    float dynamicRange = max(pc.outputContrastRange, 0.0);
+    const uint crossover = 197u;
+
+    float slopeLow = computeSlopes(originalHistogram, 0u, crossover, min(-dynamicRange, -2.5563933849334717),
+                                   -2.473931074142456, linearIndex);
+    float slopeHigh = computeSlopes(originalHistogram, crossover, NUM_BINS, -2.473931074142456, 0.0, linearIndex);
+    float slope = linearIndex < crossover ? slopeLow : slopeHigh;
+    if (linearIndex < crossover) slope = max(slope, max(pc.shadowDetailFloor, 0.0));
+
+    float inclusiveSlope = computePrefixSum(slope, linearIndex);
+    float sumOfSlopes = localData[NUM_BINS - 1u];
+    barrier();
+    float curve = (inclusiveSlope - slope - sumOfSlopes) * delta;
+    curve -= pc.shadowContrast * max(0.0, pc.shadowPivot - binLog);
+    curve = min(curve, binLog + effectiveCurveLiftLimit());
+
+    computePrefixSum(curve, linearIndex);
+    uint highIndex = min(linearIndex + 12u, NUM_BINS - 1u);
+    uint lowIndex = uint(max(0, int(linearIndex) - 13));
+    float highSum = localData[highIndex];
+    float lowSum = localData[lowIndex];
+    curve = (highSum - lowSum) / max(float(highIndex - lowIndex), 1e-6) + pc.outputOffsetEv;
+    curve -= 0.12 + 0.08 * clamp(-curve - 1.0, 0.0, 4.0);
+    if (!flagSet(RESET_TONE_CURVE)) {
+        float previousCurve = imageLoad(toneCurveImage, ivec2(int(linearIndex), 0)).r;
+        if (!isnan(previousCurve) && !isinf(previousCurve)) { curve = mix(curve, previousCurve, 0.9323938488960266); }
+    }
+
+    imageStore(toneCurveImage, ivec2(int(linearIndex), 0), vec4(curve, 0.0, 0.0, 0.0));
+    imageStore(luminanceDistributionImage, ivec2(int(linearIndex), 0), uvec4(0u));
+}

@@ -5,6 +5,7 @@
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
 #include "core/render/world.hpp"
+#include "core/vulkan/resource_memory_tracker.hpp"
 
 #include <fstream>
 #include <regex>
@@ -13,12 +14,10 @@
 UIModule::UIModule() {}
 
 UIModule::~UIModule() {
-#ifdef DEBUG
-    std::cout << "UI deconstruct" << std::endl;
-#endif
 }
 
 void UIModule::init(std::shared_ptr<Framework> framework) {
+    vk::ResourceMemoryTagScope memoryTag("ui");
     framework_ = framework;
 
     initOverlayDescriptorTablesAndFrameSamplers();
@@ -37,10 +36,6 @@ void UIModule::init(std::shared_ptr<Framework> framework) {
     for (int i = 0; i < size; i++) {
         contexts_[i] = UIModuleContext::create(framework->contexts()[i], shared_from_this());
     }
-
-#ifdef DEBUG
-    std::cout << "UI init" << std::endl;
-#endif
 }
 
 std::vector<std::shared_ptr<UIModuleContext>> &UIModule::contexts() {
@@ -127,8 +122,7 @@ uint32_t UIModule::registerOverlayDrawShader(const std::string &key,
 
         return result;
     };
-    auto adaptOverlayAttributeFormat =
-        [](VkFormat format, OverlayAttributeNumericKind numericKind) -> VkFormat {
+    auto adaptOverlayAttributeFormat = [](VkFormat format, OverlayAttributeNumericKind numericKind) -> VkFormat {
         if (numericKind == OverlayAttributeNumericKind::FLOAT) {
             switch (format) {
                 case VK_FORMAT_R16G16_SINT: return VK_FORMAT_R16G16_SSCALED;
@@ -177,10 +171,10 @@ uint32_t UIModule::registerOverlayDrawShader(const std::string &key,
     info.fragmentShaderPath = fragmentShaderPath;
     info.definitions = definitions;
     info.topology = overlayTopologyForDrawMode(drawMode);
-    info.shaders.vertexShader = vk::Shader::create(
-        framework->device(), vertexShaderPath, VK_SHADER_STAGE_VERTEX_BIT, definitions);
-    info.shaders.fragmentShader = vk::Shader::create(
-        framework->device(), fragmentShaderPath, VK_SHADER_STAGE_FRAGMENT_BIT, definitions);
+    info.shaders.vertexShader =
+        vk::Shader::create(framework->device(), vertexShaderPath, VK_SHADER_STAGE_VERTEX_BIT, definitions);
+    info.shaders.fragmentShader =
+        vk::Shader::create(framework->device(), fragmentShaderPath, VK_SHADER_STAGE_FRAGMENT_BIT, definitions);
 
     vk::DynamicGraphicsPipelineBuilder builder{1};
     vk::VertexLayoutInfo vertexLayout = makeOverlayVertexLayout(vertexFormatType, vertexShaderPath);
@@ -190,9 +184,9 @@ uint32_t UIModule::registerOverlayDrawShader(const std::string &key,
         .defineShaderStage(info.shaders.fragmentShader, VK_SHADER_STAGE_FRAGMENT_BIT)
         .endShaderStage();
     builder.defineVertexInputState(vertexLayout);
-    info.pipeline =
-        builder.defineInputAssemblyState(info.topology).definePipelineLayout(overlayDescriptorTables_[0]).build(
-            framework->device());
+    info.pipeline = builder.defineInputAssemblyState(info.topology)
+                        .definePipelineLayout(overlayDescriptorTables_[0])
+                        .build(framework->device());
 
     uint32_t shaderId = overlayDynamicDrawShaders_.size();
     overlayDynamicDrawShaderIds_[key] = shaderId;
@@ -337,7 +331,6 @@ void UIModule::initOverlayDrawRenderPass() {
     overlayDrawRenderPass_ = vk::RenderPassBuilder{}
                                  .beginAttachmentDescription()
                                  .defineAttachmentDescription(VkAttachmentDescription{
-                                     // color
                                      .format = overlayDrawColorImages_[0]->vkFormat(),
                                      .samples = VK_SAMPLE_COUNT_1_BIT,
                                      .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -353,7 +346,6 @@ void UIModule::initOverlayDrawRenderPass() {
 #endif
                                  })
                                  .defineAttachmentDescription(VkAttachmentDescription{
-                                     // depth
                                      .format = overlayDrawDepthStencilImages_[0]->vkFormat(),
                                      .samples = VK_SAMPLE_COUNT_1_BIT,
                                      .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -424,7 +416,6 @@ void UIModule::initOverlayPostRenderPass() {
     overlayPostRenderPass_ = vk::RenderPassBuilder{}
                                  .beginAttachmentDescription()
                                  .defineAttachmentDescription({
-                                     // color
                                      .format = overlayPostColorImages_[0]->vkFormat(),
                                      .samples = VK_SAMPLE_COUNT_1_BIT,
                                      .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -553,7 +544,7 @@ void UIModule::initOverlayPostPipelines() {
                     .stencilTestEnable = VK_FALSE,
                 })
                 .beginColorBlendAttachmentState()
-                .defineDefaultColorBlendAttachmentState() // color
+                .defineDefaultColorBlendAttachmentState()
                 .endColorBlendAttachmentState()
                 .definePipelineLayout(overlayDescriptorTables_[0])
                 .build(framework->device());
@@ -633,11 +624,8 @@ void UIModuleContext::syncToCommandBuffer() {
 
     auto commandBuffer = context->overlayCommandBuffer->vkCommandBuffer();
 
-    // ------------ VkPipelineViewportStateCreateInfo ------------
-    /* VK_DYNAMIC_STATE_VIEWPORT */
     vkCmdSetViewport(commandBuffer, 0, 1, &overlayViewport);
 
-    /* VK_DYNAMIC_STATE_SCISSOR */
     if (overlayScissorEnabled)
         vkCmdSetScissor(commandBuffer, 0, 1, &overlayScissor);
     else {
@@ -648,76 +636,52 @@ void UIModuleContext::syncToCommandBuffer() {
         vkCmdSetScissor(commandBuffer, 0, 1, &full_scissor);
     }
 
-    // ------------ VkPipelineDepthStencilStateCreateInfo ------------
-    /* VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE */
     vkCmdSetDepthTestEnable(commandBuffer, overlayDepthTestEnable);
 
-    /* VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE */
     vkCmdSetDepthWriteEnable(commandBuffer, overlayDepthWriteEnable);
 
-    /* VK_DYNAMIC_STATE_DEPTH_COMPARE_OP */
     vkCmdSetDepthCompareOp(commandBuffer, overlayDepthCompareOp);
 
-    /* VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE */
     vkCmdSetStencilTestEnable(commandBuffer, overlayStencilTestEnable);
 
-    /* VK_DYNAMIC_STATE_STENCIL_OP */
     vkCmdSetStencilOp(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, overlayFailOp[0], overlayPassOp[0],
                       overlayDepthFailOp[0], overlayCompareOp[0]);
     vkCmdSetStencilOp(commandBuffer, VK_STENCIL_FACE_BACK_BIT, overlayFailOp[1], overlayPassOp[1],
                       overlayDepthFailOp[1], overlayCompareOp[1]);
 
-    /* VK_DYNAMIC_STATE_STENCIL_REFERENCE */
     vkCmdSetStencilReference(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, overlayReference[0]);
     vkCmdSetStencilReference(commandBuffer, VK_STENCIL_FACE_BACK_BIT, overlayReference[1]);
 
-    /* VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK */
     vkCmdSetStencilCompareMask(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, overlayCompareMask[0]);
     vkCmdSetStencilCompareMask(commandBuffer, VK_STENCIL_FACE_BACK_BIT, overlayCompareMask[1]);
 
-    /* VK_DYNAMIC_STATE_STENCIL_WRITE_MASK */
     vkCmdSetStencilWriteMask(commandBuffer, VK_STENCIL_FACE_FRONT_BIT, overlayWriteMask[0]);
     vkCmdSetStencilWriteMask(commandBuffer, VK_STENCIL_FACE_BACK_BIT, overlayWriteMask[1]);
 
-    // ------------ VkPipelineRasterizationStateCreateInfo ------------
-    /* VK_DYNAMIC_STATE_CULL_MODE */
     vkCmdSetCullMode(commandBuffer, overlayCullMode);
 
-    /* VK_DYNAMIC_STATE_FRONT_FACE */
     vkCmdSetFrontFace(commandBuffer, overlayFrontFace);
 
-    /* VK_DYNAMIC_STATE_POLYGON_MODE_EXT */
     vkCmdSetPolygonModeEXT(commandBuffer, overlayPolygonMode);
 
-    /* VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE */
     vkCmdSetDepthBiasEnable(commandBuffer, overlayDepthBiasEnable);
 
-    /* VK_DYNAMIC_STATE_DEPTH_BIAS */
     vkCmdSetDepthBias(commandBuffer, overlayDepthBiasConstantFactor[overlayPolygonMode],
                       overlayDepthBiasClamp[overlayPolygonMode], overlayDepthBiasSlopeFactor[overlayPolygonMode]);
 
-    /* VK_DYNAMIC_STATE_LINE_WIDTH */
     vkCmdSetLineWidth(commandBuffer, overlayLineWidth);
 
-    // ------------ VkPipelineColorBlendAttachmentState / StateCreateInfo ------------
-    /* VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT */
     vkCmdSetColorBlendEnableEXT(commandBuffer, 0, 1, &overlayBlendEnabled);
 
-    /* VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT */
     vkCmdSetColorBlendEquationEXT(commandBuffer, 0, 1, &overlayColorBlendEquation);
 
-    /* VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT */
     vkCmdSetColorWriteMaskEXT(commandBuffer, 0, 1, &overlayColorWriteMask);
 
-    // ------------ VkPipelineColorBlendStateCreateInfo ------------
-    /* VK_DYNAMIC_STATE_LOGIC_OP_EXT and VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT */
-    // Only call these if extendedDynamicState2LogicOp feature is enabled
     if (context->device->hasExtendedDynamicState2LogicOp()) {
         vkCmdSetLogicOpEXT(commandBuffer, overlayColorLogicOp);
         vkCmdSetLogicOpEnableEXT(commandBuffer, overlayColorLogicOpEnable);
     }
 
-    /* VK_DYNAMIC_STATE_BLEND_CONSTANTS */
     vkCmdSetBlendConstants(commandBuffer, overlayBlendConstants.data());
 }
 
@@ -790,8 +754,6 @@ void UIModuleContext::setOverlayScissor(int x, int y, int width, int height) {
 
     if (!framework->isRunning()) return;
 
-    // opengl scissor box with left bottom as origin
-    // vulkan scissor box with left top as origin
     y = context->swapchainImage->height() - (y + height);
 
     x = std::max(x, 0);
@@ -1268,6 +1230,8 @@ void UIModuleContext::clearOverlayEntireColorAttachment() {
     if (!framework->isRunning()) return;
 
     switchOverlayDraw();
+    vk::CommandBuffer::ScopedDebugLabel debugLabel(*context->overlayCommandBuffer, "ui/clear_color", 0.95f, 0.55f,
+                                                   0.25f);
 
     VkClearAttachment clearAttachment{};
     clearAttachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1293,6 +1257,8 @@ void UIModuleContext::clearOverlayEntireDepthStencilAttachment(int aspectMask) {
     if (!framework->isRunning()) return;
 
     switchOverlayDraw();
+    vk::CommandBuffer::ScopedDebugLabel debugLabel(*context->overlayCommandBuffer, "ui/clear_depth_stencil", 0.95f,
+                                                   0.55f, 0.25f);
 
     VkClearAttachment clearAttachment{};
     clearAttachment.aspectMask = aspectMask;
@@ -1321,6 +1287,8 @@ void UIModuleContext::drawIndexed(std::shared_ptr<vk::DeviceLocalBuffer> vertexB
     if (!framework->isRunning()) return;
 
     switchOverlayDraw();
+    vk::CommandBuffer::ScopedDebugLabel debugLabel(*context->overlayCommandBuffer, "ui/draw_indexed", 0.95f, 0.55f,
+                                                   0.25f);
 
     auto &shaderInfo = module->overlayDrawShaderInfo(shaderId);
     vkCmdBindPipeline(context->overlayCommandBuffer->vkCommandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1328,7 +1296,8 @@ void UIModuleContext::drawIndexed(std::shared_ptr<vk::DeviceLocalBuffer> vertexB
 
     uint32_t dynamicOffsets[] = {uniformOffset, 0};
     vkCmdBindDescriptorSets(context->overlayCommandBuffer->vkCommandBuffer(), VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            overlayDescriptorTable->vkPipelineLayout(), 0, overlayDescriptorTable->descriptorSet().size(),
+                            overlayDescriptorTable->vkPipelineLayout(), 0,
+                            overlayDescriptorTable->descriptorSet().size(),
                             overlayDescriptorTable->descriptorSet().data(), 2, dynamicOffsets);
 
     context->overlayCommandBuffer->bindVertexBuffers(vertexBuffer)
@@ -1343,6 +1312,7 @@ void UIModuleContext::postBlur(int times) {
 
     if (!framework->isRunning()) return;
 
+    vk::CommandBuffer::ScopedDebugLabel debugLabel(*context->overlayCommandBuffer, "ui/post_blur", 0.95f, 0.55f, 0.25f);
     int postID = Renderer::instance().buffers()->getPostID();
 
     for (int i = postID - times + 1; i <= postID; i++) {
@@ -1398,7 +1368,6 @@ void UIModuleContext::postBlur(int times) {
         overlayPostColorImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-        // TODO: add to command buffer
         VkImageBlit imageBlit{};
         imageBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         imageBlit.srcSubresource.mipLevel = 0;
@@ -1471,12 +1440,10 @@ void UIModuleContext::begin(std::shared_ptr<UIModuleContext> lastContext) {
 
     overlayMode = NONE;
 
-    overlayDescriptorTable->bindBufferRange(
-        Renderer::instance().buffers()->overlayPostUniformBuffer(), 1, 1, 0,
-        Renderer::instance().buffers()->overlayPostUniformDescriptorRange());
-    overlayDescriptorTable->bindBufferRange(
-        Renderer::instance().buffers()->overlayDrawUniformBuffer(), 1, 0, 0,
-        Renderer::instance().buffers()->overlayDrawUniformDescriptorRange());
+    overlayDescriptorTable->bindBufferRange(Renderer::instance().buffers()->overlayPostUniformBuffer(), 1, 1, 0,
+                                            Renderer::instance().buffers()->overlayPostUniformDescriptorRange());
+    overlayDescriptorTable->bindBufferRange(Renderer::instance().buffers()->overlayDrawUniformBuffer(), 1, 0, 0,
+                                            Renderer::instance().buffers()->overlayDrawUniformDescriptorRange());
     context->overlayCommandBuffer->bindDescriptorTable(overlayDescriptorTable, VK_PIPELINE_BIND_POINT_GRAPHICS);
 
     if (lastContext != nullptr)

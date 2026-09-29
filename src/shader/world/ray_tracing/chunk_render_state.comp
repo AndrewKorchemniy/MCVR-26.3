@@ -1,0 +1,113 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference2 : require
+
+#include "common/shared.hpp"
+#include "vista_coverage.glsl"
+
+layout(local_size_x = 64) in;
+
+struct ChunkRenderRecord {
+    ivec4 positionAndGeometryCount;
+    uvec4 offsetsMaskFlags;
+    uvec4 blasAddress;
+};
+
+struct AccelerationStructureInstance {
+    vec4 transform0;
+    vec4 transform1;
+    vec4 transform2;
+    uint customIndexAndMask;
+    uint sbtOffsetAndFlags;
+    uint referenceLow;
+    uint referenceHigh;
+};
+
+layout(set = 0, binding = 0, std430) readonly buffer ChunkRenderRecords {
+    ChunkRenderRecord records[];
+}
+chunkRenderRecords;
+
+layout(set = 0, binding = 1, std430) writeonly buffer TlasInstances {
+    AccelerationStructureInstance instances[];
+}
+tlasInstances;
+
+layout(set = 0, binding = 2, std430) writeonly buffer BlasOffsets {
+    uint offsets[];
+}
+blasOffsets;
+
+layout(set = 0, binding = 3, std430) writeonly buffer LastObjToWorldMats {
+    mat4 matrices[];
+}
+lastObjToWorldMats;
+
+layout(set = 0, binding = 4, std430) writeonly buffer LastIndexBufferAddresses {
+    uint64_t addresses[];
+}
+lastIndexBufferAddresses;
+
+layout(set = 0, binding = 5, std430) writeonly buffer LastPBRBufferAddresses {
+    uint64_t addresses[];
+}
+lastPbrBufferAddresses;
+
+layout(set = 0, binding = 6) uniform WorldUniform {
+    WorldUBO worldUBO;
+};
+
+layout(push_constant) uniform PushConstants {
+    ivec4 cameraBase;
+    vec4 cameraFraction;
+    ivec4 lastCameraBase;
+    vec4 lastCameraFraction;
+    uint chunkCount;
+    uint entityInstanceCount;
+    uint entityGeometryCount;
+    uint entityHitGroupCount;
+}
+pushConstants;
+
+const uint CHUNK_GEOMETRY_BUFFER_INDEX_BIT = 0x80000000u;
+
+void main() {
+    uint chunkIndex = gl_GlobalInvocationID.x;
+    if (chunkIndex >= pushConstants.chunkCount) { return; }
+
+    ChunkRenderRecord record = chunkRenderRecords.records[chunkIndex];
+    uint instanceIndex = pushConstants.entityInstanceCount + chunkIndex;
+    uint geometryCount = uint(record.positionAndGeometryCount.w);
+    uint geometryOffset = record.offsetsMaskFlags.x;
+    uint hitGroupOffset = record.offsetsMaskFlags.y;
+    uint mask = record.offsetsMaskFlags.z & 0xffu;
+    if (vistaUsesFallback(worldUBO, record.positionAndGeometryCount.xz / 16)) { mask = 0u; }
+    uint flags = record.offsetsMaskFlags.w & 0xffu;
+    if (vistaHasBorder(worldUBO, record.positionAndGeometryCount.xz / 16)) { flags = (flags & ~4u) | 8u; }
+
+    vec3 translation =
+        vec3(record.positionAndGeometryCount.xyz - pushConstants.cameraBase.xyz) - pushConstants.cameraFraction.xyz;
+    vec3 lastTranslation = vec3(record.positionAndGeometryCount.xyz - pushConstants.lastCameraBase.xyz) -
+                           pushConstants.lastCameraFraction.xyz;
+
+    tlasInstances.instances[instanceIndex].transform0 = vec4(1.0, 0.0, 0.0, translation.x);
+    tlasInstances.instances[instanceIndex].transform1 = vec4(0.0, 1.0, 0.0, translation.y);
+    tlasInstances.instances[instanceIndex].transform2 = vec4(0.0, 0.0, 1.0, translation.z);
+    tlasInstances.instances[instanceIndex].customIndexAndMask = (instanceIndex & 0x00ffffffu) | (mask << 24u);
+    tlasInstances.instances[instanceIndex].sbtOffsetAndFlags =
+        ((pushConstants.entityHitGroupCount + hitGroupOffset) & 0x00ffffffu) | (flags << 24u);
+    tlasInstances.instances[instanceIndex].referenceLow = record.blasAddress.x;
+    tlasInstances.instances[instanceIndex].referenceHigh = record.blasAddress.y;
+
+    blasOffsets.offsets[instanceIndex] =
+        CHUNK_GEOMETRY_BUFFER_INDEX_BIT | (pushConstants.entityGeometryCount + geometryOffset);
+    lastObjToWorldMats.matrices[instanceIndex] =
+        mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(lastTranslation, 1.0));
+
+    for (uint geometryIndex = 0; geometryIndex < geometryCount; geometryIndex++) {
+        uint metadataIndex = pushConstants.entityGeometryCount + geometryOffset + geometryIndex;
+        lastIndexBufferAddresses.addresses[metadataIndex] = 0ul;
+        lastPbrBufferAddresses.addresses[metadataIndex] = 0ul;
+    }
+}

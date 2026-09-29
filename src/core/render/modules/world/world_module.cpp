@@ -13,3 +13,12 @@ void WorldModule::init(std::shared_ptr<Framework> framework, std::shared_ptr<Wor
 WorldModuleContext::WorldModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
                                        std::shared_ptr<WorldPipelineContext> worldPipelineContext)
     : frameworkContext(frameworkContext), worldPipelineContext(worldPipelineContext) {}
+
+void WorldModuleContext::setWorldPipelineContext(std::shared_ptr<WorldPipelineContext> worldPipelineContext) {
+    this->worldPipelineContext = worldPipelineContext;
+}
+
+bool WorldModuleContext::populateFrameGenerationInputs(mcvr::FrameGenerationInputs &inputs) {
+    (void)inputs;
+    return false;
+}

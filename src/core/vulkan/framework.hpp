@@ -93,4 +93,4 @@ class Framework : public SharedObject<Framework> {
 
     std::vector<std::shared_ptr<Context>> contexts_;
 };
-}; // namespace vk
+};

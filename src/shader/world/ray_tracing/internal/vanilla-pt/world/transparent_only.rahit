@@ -7,5 +7,4 @@
 layout(location = 0) rayPayloadInEXT MainRay mainRay;
 hitAttributeEXT vec2 attribs;
 
-void main() {
-}
+void main() {}

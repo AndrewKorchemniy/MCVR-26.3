@@ -5,23 +5,22 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-// Using Samplers + texelFetch for optimized data access
 layout(set = 0, binding = 7) uniform sampler2D giHistorySampler;
 layout(set = 0, binding = 19) uniform sampler2D giMomentsSampler;
 layout(set = 0, binding = 13) uniform sampler2D giHistoryLengthSampler;
 layout(set = 0, binding = 2) uniform sampler2D linearDepthSampler;
 layout(set = 0, binding = 3) uniform sampler2D normalRoughnessSampler;
 
-// Outputs to atrous pass
 layout(set = 0, binding = 24, rgba16f) uniform writeonly image2D atrousStepImage0;
 layout(set = 0, binding = 25, r16f) uniform writeonly image2D atrousVarianceImage0;
 
 layout(push_constant) uniform PushConstants {
     ivec2 size;
-    float phiDepth;   // Depth scale
-    float phiNormal;  // Normal exponent
-    float phiLuma;    // Illumination scale
-} pc;
+    float phiDepth;
+    float phiNormal;
+    float phiLuma;
+}
+pc;
 
 const float EPS = 1e-6;
 
@@ -33,16 +32,27 @@ float luminance(vec3 c) {
     return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
-float saturate(float x) { return clamp(x, 0.0, 1.0); }
+float saturate(float x) {
+    return clamp(x, 0.0, 1.0);
+}
 
-float computeWeight(float depthCenter, float depthP, float phiDepth, vec3 normalCenter, vec3 normalP, float phiNormal, float lumCenter, float lumP, float phiIllum) {
+float computeWeight(float depthCenter,
+                    float depthP,
+                    float phiDepth,
+                    vec3 normalCenter,
+                    vec3 normalP,
+                    float phiNormal,
+                    float lumCenter,
+                    float lumP,
+                    float phiIllum) {
     float wN = pow(saturate(dot(normalCenter, normalP)), phiNormal);
     float wZ = (phiDepth == 0.0) ? 0.0 : abs(depthCenter - depthP) / phiDepth;
     float wL = abs(lumCenter - lumP) / max(phiIllum, EPS);
     return exp(-max(wL, 0.0) - max(wZ, 0.0)) * wN;
 }
 
-float computeGeomWeight(float depthCenter, float depthP, float phiDepth, vec3 normalCenter, vec3 normalP, float phiNormal) {
+float computeGeomWeight(
+    float depthCenter, float depthP, float phiDepth, vec3 normalCenter, vec3 normalP, float phiNormal) {
     float wN = pow(saturate(dot(normalCenter, normalP)), phiNormal);
     float wZ = (phiDepth == 0.0) ? 0.0 : abs(depthCenter - depthP) / phiDepth;
     return exp(-max(wZ, 0.0)) * wN;
@@ -52,7 +62,6 @@ void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (!inBounds(p)) return;
 
-    // --- 1. Fetch Core Data using texelFetch ---
     vec3 illumCenter = texelFetch(giHistorySampler, p, 0).rgb;
     vec2 momCenter = texelFetch(giMomentsSampler, p, 0).rg;
     float h = texelFetch(giHistoryLengthSampler, p, 0).r;
@@ -66,7 +75,6 @@ void main() {
     vec3 illumOut = illumCenter;
     float varOut = varRaw;
 
-    // Spatially filter moments only when not enough temporal history
     if (h < 4.0 && zC > 0.0 && zC < INF_DISTANCE) {
         float lumC = luminance(illumCenter);
         float sumW = 0.0;
@@ -85,7 +93,8 @@ void main() {
                 vec2 momP = texelFetch(giMomentsSampler, q, 0).rg;
 
                 float phiDepthLocal = pc.phiDepth * max(length(vec2(dx, yy)), 1.0);
-                float w = computeWeight(zC, zP, phiDepthLocal, nC, nP, pc.phiNormal, lumC, luminance(illumP), pc.phiLuma);
+                float w =
+                    computeWeight(zC, zP, phiDepthLocal, nC, nP, pc.phiNormal, lumC, luminance(illumP), pc.phiLuma);
 
                 sumW += w;
                 sumIllum += w * illumP;
@@ -99,7 +108,6 @@ void main() {
         varOut = max(momOut.y - momOut.x * momOut.x, 0.0) * (4.0 / max(h, 1.0));
     }
 
-    // Variance dilation (3x3 max)
     if (zC > 0.0 && zC < INF_DISTANCE) {
         float varDilated = varOut;
         for (int yy = -1; yy <= 1; ++yy) {
@@ -107,10 +115,10 @@ void main() {
                 if (dx == 0 && yy == 0) continue;
                 ivec2 q = p + ivec2(dx, yy);
                 if (!inBounds(q)) continue;
-                
+
                 float zQ = texelFetch(linearDepthSampler, q, 0).x;
                 if (zQ <= 0.0 || zQ >= INF_DISTANCE) continue;
-                
+
                 vec3 nQ = texelFetch(normalRoughnessSampler, q, 0).rgb;
                 float phiDepthLocal = pc.phiDepth * max(length(vec2(dx, yy)), 1.0);
                 if (computeGeomWeight(zC, zQ, phiDepthLocal, nC, nQ, pc.phiNormal) < 0.01) continue;

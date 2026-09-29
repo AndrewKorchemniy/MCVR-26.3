@@ -10,7 +10,7 @@
 #include <unordered_map>
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 
 struct GraphicsPipelineShaderInfo {
     std::string vertexShaderFile;
@@ -134,7 +134,7 @@ struct UIModuleContext : public SharedObject<UIModuleContext> {
     bool overlayDepthWriteEnable;
     VkCompareOp overlayDepthCompareOp;
     bool overlayStencilTestEnable;
-    std::array<VkStencilOp, 2> overlayFailOp; // for front and back face
+    std::array<VkStencilOp, 2> overlayFailOp;
     std::array<VkStencilOp, 2> overlayPassOp;
     std::array<VkStencilOp, 2> overlayDepthFailOp;
     std::array<VkCompareOp, 2> overlayCompareOp;
@@ -146,7 +146,7 @@ struct UIModuleContext : public SharedObject<UIModuleContext> {
     VkFrontFace overlayFrontFace;
     VkPolygonMode overlayPolygonMode;
     bool overlayDepthBiasEnable;
-    std::array<float, 3> overlayDepthBiasConstantFactor; // for 3 types of polygon mode
+    std::array<float, 3> overlayDepthBiasConstantFactor;
     std::array<float, 3> overlayDepthBiasClamp;
     std::array<float, 3> overlayDepthBiasSlopeFactor;
     float overlayLineWidth;

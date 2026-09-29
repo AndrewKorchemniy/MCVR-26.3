@@ -5,7 +5,7 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;   // R: visibility, G: hitDist, B: NoL, A: flags
+layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;
 layout(set = 0, binding = 1, rgba16f) uniform image2D shadowOutputImage;
 layout(set = 0, binding = 2, r32f) uniform image2D linearDepthImage;
 layout(set = 0, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
@@ -26,7 +26,6 @@ void main() {
         return;
     }
 
-    // 17x17 neighborhood mean/variance for robust clamp
     float sum = 0.0;
     float sum2 = 0.0;
     float count = 0.0;
@@ -46,16 +45,14 @@ void main() {
     float variance = max(0.0, (count > 0.0 ? (sum2 / count) : 0.0) - mean * mean);
     float stddev = sqrt(variance);
 
-    float k = 0.6; // clamp strength (more aggressive)
+    float k = 0.6;
     float minV = mean - k * stddev;
     float maxV = mean + k * stddev;
     float outVis = clamp(centerVis, minV, maxV);
 
-    // extra pull toward mean for mid-penumbra to kill speckles
     float meanPull = smoothstep(0.15, 0.85, mean) * smoothstep(0.0008, 0.02, variance);
     outVis = mix(outVis, mean, 0.35 * meanPull);
 
-    // Tile-level denoise flag stored per pixel (A)
     float denoiseNeeded = (variance > 0.0008 || (mean > 0.03 && mean < 0.97)) ? 1.0 : 0.0;
 
     imageStore(shadowOutputImage, pixel, vec4(outVis, centerHit, centerNoL, denoiseNeeded));

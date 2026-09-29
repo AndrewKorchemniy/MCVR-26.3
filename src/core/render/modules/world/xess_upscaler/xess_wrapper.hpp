@@ -36,7 +36,7 @@ struct XeSSConfig {
     uint32_t displayWidth = 0;
     uint32_t displayHeight = 0;
 
-    XeSSQualityMode qualityMode = XeSSQualityMode::Quality;
+    XeSSQualityMode qualityMode = XeSSQualityMode::Balanced;
     uint32_t initFlags = 0;
 
     float velocityScaleX = 1.0f;
@@ -104,7 +104,7 @@ class XeSSWrapper {
     uint32_t renderHeight_ = 0;
     uint32_t displayWidth_ = 0;
     uint32_t displayHeight_ = 0;
-    XeSSQualityMode qualityMode_ = XeSSQualityMode::Quality;
+    XeSSQualityMode qualityMode_ = XeSSQualityMode::Balanced;
     uint32_t initFlags_ = 0;
     float velocityScaleX_ = 1.0f;
     float velocityScaleY_ = 1.0f;
@@ -121,4 +121,4 @@ inline bool XeSSWrapper::isInitialized() const {
     return initialized_;
 }
 
-} // namespace mcvr
+}

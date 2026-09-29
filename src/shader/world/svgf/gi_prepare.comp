@@ -5,18 +5,17 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-// Use Samplers but access via texelFetch for best performance and compatibility
 layout(set = 0, binding = 0) uniform sampler2D giRadianceSampler;
 layout(set = 0, binding = 11) uniform sampler2D diffuseAlbedoSampler;
 
-// Output: demodulated radiance and initial moments
 layout(set = 0, binding = 22, rgba16f) uniform writeonly image2D demodulatedGiImage;
 layout(set = 0, binding = 19, rg32f) uniform writeonly image2D giMomentsOut;
 
 layout(push_constant) uniform PushConstants {
     ivec2 size;
-    float fireflyK;  // Firefly clamp threshold
-} pc;
+    float fireflyK;
+}
+pc;
 
 const float eps = 1e-6;
 
@@ -32,14 +31,11 @@ void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= pc.size.x || p.y >= pc.size.y) return;
 
-    // --- High performance texelFetch ---
     vec3 C = texelFetch(giRadianceSampler, p, 0).rgb;
     vec3 A = texelFetch(diffuseAlbedoSampler, p, 0).rgb;
 
-    // Demodulate
     vec3 L = safeDiv(C, A);
 
-    // ---- Firefly clamp (3x3 neighborhood) ----
     float sum = 0.0;
     float sum2 = 0.0;
     int cnt = 0;
@@ -48,7 +44,7 @@ void main() {
         for (int dx = -1; dx <= 1; ++dx) {
             ivec2 q = p + ivec2(dx, dy);
             if (q.x < 0 || q.y < 0 || q.x >= pc.size.x || q.y >= pc.size.y) continue;
-            
+
             vec3 Cq = texelFetch(giRadianceSampler, q, 0).rgb;
             vec3 Aq = texelFetch(diffuseAlbedoSampler, q, 0).rgb;
             float y = luminance(safeDiv(Cq, Aq));

@@ -18,9 +18,7 @@ mat2 fftWaterRotation(float angle) {
 void fftWaterStableBasis(vec3 geometricNormal, out vec3 tangent, out vec3 bitangent) {
     vec3 upNormal = geometricNormal.y >= 0.0 ? geometricNormal : -geometricNormal;
     tangent = vec3(1.0, 0.0, 0.0) - upNormal * upNormal.x;
-    if (dot(tangent, tangent) < 1e-10) {
-        tangent = vec3(0.0, 0.0, 1.0) - upNormal * upNormal.z;
-    }
+    if (dot(tangent, tangent) < 1e-10) { tangent = vec3(0.0, 0.0, 1.0) - upNormal * upNormal.z; }
     tangent = normalize(tangent);
     bitangent = normalize(cross(tangent, upNormal));
 }
@@ -52,8 +50,8 @@ void fftWaterAddWave(vec2 p,
 
 FftWaterSample sampleFftWater(vec2 worldXZ, float gameTime) {
     float t = gameTime * 24000.0 * 0.05;
-    vec2 lowFlow = vec2(sin(dot(worldXZ, vec2(0.023, -0.019)) + t * 0.61),
-                        cos(dot(worldXZ, vec2(-0.017, 0.021)) - t * 0.54));
+    vec2 lowFlow =
+        vec2(sin(dot(worldXZ, vec2(0.023, -0.019)) + t * 0.61), cos(dot(worldXZ, vec2(-0.017, 0.021)) - t * 0.54));
     vec2 highFlow = vec2(cos(dot(worldXZ, vec2(0.041, 0.037)) - t * 0.88 + 1.9),
                          sin(dot(worldXZ, vec2(-0.036, 0.044)) + t * 0.79 - 0.7));
     vec2 flow = lowFlow * 0.55 + highFlow * 0.25;

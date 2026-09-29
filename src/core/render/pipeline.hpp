@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <mutex>
 
 struct WorldPipelineBuildParams {
     int moduleCount;
@@ -17,16 +18,18 @@ struct WorldPipelineBuildParams {
     int **inputIndices;
     int **outputIndices;
     int *attributeCounts;
-    char*** attributeKVs;
+    char ***attributeKVs;
 };
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldModule;
-class WorldModuleContext;
+struct WorldModuleContext;
 class ShaderPack;
+#ifdef MCVR_UI_BACKEND_VULKAN
 class UIModule;
 class UIModuleContext;
+#endif
 
 class WorldPipeline;
 struct WorldPipelineContext;
@@ -39,6 +42,12 @@ class WorldPipelineBlueprint : public SharedObject<WorldPipelineBlueprint> {
 
   public:
     WorldPipelineBlueprint(WorldPipelineBuildParams *params);
+
+    const std::vector<std::string> &moduleNames() const;
+    const std::vector<std::vector<uint32_t>> &moduleInputIndices() const;
+    const std::vector<std::vector<uint32_t>> &moduleOutputIndices() const;
+    const std::vector<VkFormat> &imageFormats() const;
+    const std::vector<std::vector<std::string>> &attributeKVs() const;
 
   private:
     std::vector<std::string> moduleNames_;
@@ -65,9 +74,9 @@ class WorldPipeline : public SharedObject<WorldPipeline> {
     void bindTexture(std::shared_ptr<vk::Sampler> sampler, std::shared_ptr<vk::DeviceLocalImage> image, int index);
 
   private:
-    void dumpSharedImages(const char *label) const;
 
     std::vector<std::shared_ptr<WorldModule>> worldModules_;
+    std::vector<std::string> worldModuleNames_;
     std::vector<std::vector<std::shared_ptr<vk::DeviceLocalImage>>> sharedImages_;
     std::shared_ptr<ShaderPack> shaderPack_;
 
@@ -114,22 +123,28 @@ class Pipeline : public SharedObject<Pipeline> {
     std::vector<std::shared_ptr<PipelineContext>> &contexts();
     void bindTexture(std::shared_ptr<vk::Sampler> sampler, std::shared_ptr<vk::DeviceLocalImage> image, int index);
 
+#ifdef MCVR_UI_BACKEND_VULKAN
     std::shared_ptr<UIModule> uiModule();
+#endif
     std::shared_ptr<WorldPipeline> worldPipeline();
 
     std::shared_ptr<WorldPipelineBlueprint> worldPipelineBlueprint();
-
-    bool isRecreationNeeded = false;
+    bool isRecreationNeeded() const;
 
   private:
     static std::atomic<bool> nativeRebuildActive_;
 
     std::weak_ptr<Framework> framework_;
 
+#ifdef MCVR_UI_BACKEND_VULKAN
     std::shared_ptr<UIModule> uiModule_;
+#endif
     std::shared_ptr<WorldPipeline> worldPipeline_;
 
+    mutable std::mutex blueprintMtx_;
     std::shared_ptr<WorldPipelineBlueprint> worldPipelineBlueprint_;
+    std::shared_ptr<WorldPipelineBlueprint> pendingWorldPipelineBlueprint_;
+    std::atomic<bool> recreationNeeded_{false};
 
     std::shared_ptr<std::vector<std::shared_ptr<PipelineContext>>> contexts_;
 };
@@ -137,10 +152,14 @@ class Pipeline : public SharedObject<Pipeline> {
 struct PipelineContext : public SharedObject<PipelineContext> {
     std::weak_ptr<FrameworkContext> frameworkContext;
 
+#ifdef MCVR_UI_BACKEND_VULKAN
     std::shared_ptr<UIModuleContext> uiModuleContext;
+#endif
     std::shared_ptr<WorldPipelineContext> worldPipelineContext;
 
     PipelineContext(std::shared_ptr<FrameworkContext> context, std::shared_ptr<Pipeline> pipeline);
 
+#ifdef MCVR_UI_BACKEND_VULKAN
     void fuseWorld();
+#endif
 };

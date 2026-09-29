@@ -13,7 +13,7 @@ layout(set = 1, binding = 1) uniform SkyUniform {
 };
 
 layout(location = 0) in vec3 inPos;
-layout(location = 4) in vec4 inColorLayer;
+layout(location = 3) in uint inColorRGBA8;
 
 layout(location = 0) out vec3 outPos;
 layout(location = 1) out vec4 outColorLayer;
@@ -29,9 +29,8 @@ void main() {
     } else if (rotationCos <= 0.9999) {
         vec3 rotationAxis = normalize(cross(sourceDir, targetDir));
         float rotationSin = length(cross(sourceDir, targetDir));
-        mat3 skewMatrix =
-            mat3(0.0, rotationAxis.z, -rotationAxis.y, -rotationAxis.z, 0.0, rotationAxis.x, rotationAxis.y,
-                 -rotationAxis.x, 0.0);
+        mat3 skewMatrix = mat3(0.0, rotationAxis.z, -rotationAxis.y, -rotationAxis.z, 0.0, rotationAxis.x,
+                               rotationAxis.y, -rotationAxis.x, 0.0);
         rotationMatrix = mat3(1.0) + skewMatrix * rotationSin + (skewMatrix * skewMatrix) * (1.0 - rotationCos);
     }
 
@@ -42,5 +41,6 @@ void main() {
     outScreenUv = clipPos.xy / max(clipPos.w, 1e-4) * 0.5 + 0.5;
 
     float vis = smoothstep(0.0, -0.2, skyUBO.sunDirection.y);
-    outColorLayer = vec4(inColorLayer.rgb * vis, vis);
+    vec4 inColorLayer = unpackUnorm4x8(inColorRGBA8);
+    outColorLayer = vec4(inColorLayer.rgb, inColorLayer.a * vis);
 }

@@ -13,10 +13,11 @@ layout(set = 1, binding = 1) uniform SkyUniform {
 };
 
 layout(location = 0) in vec3 inPos;
-layout(location = 4) in vec4 inColorLayer;
+layout(location = 3) in uint inColorRGBA8;
 
 layout(location = 0) out vec3 outPos;
 layout(location = 1) out vec4 outColorLayer;
+layout(location = 2) out vec2 outScreenUv;
 
 mat3 rotationFromXToDir(vec3 sunDir) {
     vec3 a = vec3(1.0, 0.0, 0.0);
@@ -45,8 +46,11 @@ void main() {
     mat3 R = rotationFromXToDir(skyUBO.sunDirection);
     vec3 pos = R * inPos;
     outPos = pos;
-    gl_Position = worldUBO.cameraProjMat * worldUBO.cameraEffectedViewMat * vec4(pos, 1.0);
+    vec4 clipPos = worldUBO.cameraProjMat * worldUBO.cameraEffectedViewMat * vec4(pos, 1.0);
+    gl_Position = clipPos;
+    outScreenUv = clipPos.xy / max(clipPos.w, 1e-4) * 0.5 + 0.5;
 
     float vis = starVisibilityFromSunY(skyUBO.sunDirection.y);
-    outColorLayer = vec4(inColorLayer.rgb * vis, vis);
+    vec4 inColorLayer = unpackUnorm4x8(inColorRGBA8);
+    outColorLayer = vec4(inColorLayer.rgb, inColorLayer.a * vis);
 }

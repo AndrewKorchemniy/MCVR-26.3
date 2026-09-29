@@ -12,6 +12,7 @@
 class Framework;
 class Chunks;
 class Entities;
+class Vista;
 
 class World : public SharedObject<World> {
   public:
@@ -28,7 +29,8 @@ class World : public SharedObject<World> {
         POSITION_COLOR_TEXTURE_LIGHT,
         POSITION_TEXTURE_LIGHT_COLOR,
         POSITION_TEXTURE_COLOR_NORMAL,
-        PBR_TRIANGLE,
+        ENTITY_PBR_TRIANGLE,
+        CHUNK_PBR_TRIANGLE,
         NUM_VERTEX_FORMATS,
     };
 
@@ -68,6 +70,7 @@ class World : public SharedObject<World> {
 
     std::shared_ptr<Chunks> chunks();
     std::shared_ptr<Entities> entities();
+    std::shared_ptr<Vista> vista();
 
     void setCameraPos(glm::dvec3 cameraPos);
     glm::dvec3 getCameraPos();
@@ -77,6 +80,7 @@ class World : public SharedObject<World> {
   private:
     std::shared_ptr<Chunks> chunks_;
     std::shared_ptr<Entities> entities_;
+    std::shared_ptr<Vista> vista_;
 
     glm::dvec3 cameraPos_ = {0, 0, 0};
 

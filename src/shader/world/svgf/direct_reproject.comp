@@ -5,7 +5,6 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-// --- Bindings ---
 layout(set = 0, binding = 0, rgba16f) uniform image2D directRadianceImage;
 layout(set = 0, binding = 1, rg16f) uniform image2D motionVectorImage;
 layout(set = 0, binding = 2, r16f) uniform image2D linearDepthImage;
@@ -23,7 +22,7 @@ layout(set = 0, binding = 10) uniform WorldUniform {
     WorldUBO worldUBO;
 };
 
-layout(set = 0, binding = 11, rgba8) uniform readonly image2D diffuseAlbedoImage; // Added for Demodulation
+layout(set = 0, binding = 11, rgba8) uniform readonly image2D diffuseAlbedoImage;
 layout(set = 0, binding = 12, r16ui) uniform uimage2D directHistoryLengthPrev;
 layout(set = 0, binding = 13, r16ui) uniform uimage2D directHistoryLengthOut;
 layout(set = 0, binding = 14, rg32f) uniform image2D directMomentsPrev;
@@ -40,7 +39,8 @@ vec3 neighborhoodClamp(ivec2 pixel, vec3 centerColor, ivec2 size) {
         for (int dx = -1; dx <= 1; ++dx) {
             ivec2 q = clamp(pixel + ivec2(dx, dy), ivec2(0), size - 1);
             vec3 c = imageLoad(directRadianceImage, q).rgb / max(imageLoad(diffuseAlbedoImage, q).rgb, vec3(0.01));
-            mn = min(mn, c); mx = max(mx, c);
+            mn = min(mn, c);
+            mx = max(mx, c);
         }
     }
     return clamp(centerColor, mn, mx);
@@ -51,15 +51,13 @@ void main() {
     ivec2 size = imageSize(directRadianceImage);
     if (pixel.x >= size.x || pixel.y >= size.y) return;
 
-    // 1. Load & Demodulate (Signal = Radiance / Albedo)
     vec3 albedo = max(imageLoad(diffuseAlbedoImage, pixel).rgb, vec3(0.01));
     vec3 currDirect = imageLoad(directRadianceImage, pixel).rgb / albedo;
-    
+
     vec2 motion = imageLoad(motionVectorImage, pixel).xy;
     float currDepth = imageLoad(linearDepthImage, pixel).r;
     vec3 currNormal = normalize(imageLoad(normalRoughnessImage, pixel).xyz);
 
-    // 2. Reproject
     vec2 prevPixelF = vec2(pixel) + motion;
     ivec2 prevPixel = ivec2(round(prevPixelF));
     bool valid = (prevPixel.x >= 0 && prevPixel.y >= 0 && prevPixel.x < size.x && prevPixel.y < size.y);
@@ -69,7 +67,7 @@ void main() {
     uint historyLength = 0;
 
     if (valid) {
-        vec3 prevDirect = imageLoad(directHistoryPrev, prevPixel).rgb; // Already demodulated in prev frame
+        vec3 prevDirect = imageLoad(directHistoryPrev, prevPixel).rgb;
         float prevDepth = imageLoad(directDepthPrev, prevPixel).r;
         vec3 prevNormal = imageLoad(directNormalPrev, prevPixel).xyz;
         vec2 prevMoments = imageLoad(directMomentsPrev, prevPixel).rg;
@@ -77,7 +75,7 @@ void main() {
 
         if (abs(currDepth - prevDepth) / max(currDepth, 0.01) < 0.1 && dot(currNormal, normalize(prevNormal)) > 0.9) {
             prevDirect = neighborhoodClamp(pixel, prevDirect, size);
-            float alpha = 0.1; // Slower for direct light
+            float alpha = 0.1;
             outDirect = mix(prevDirect, currDirect, alpha);
             float currLum = luminance(outDirect);
             outMoments = mix(prevMoments, vec2(currLum, currLum * currLum), alpha);

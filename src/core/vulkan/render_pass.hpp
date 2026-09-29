@@ -98,4 +98,4 @@ class RenderPassBuilder {
     SubpassDescriptionBuilder subpassDescriptionBuilder_;
     SubpassDependencyBuilder subpassDependencyBuilder_;
 };
-}; // namespace vk
+};

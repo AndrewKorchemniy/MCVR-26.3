@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 
-
 namespace vk {
 class Device;
 class RenderPass;
@@ -27,7 +26,7 @@ class DynamicGraphicsPipeline : public SharedObject<DynamicGraphicsPipeline> {
     VkPipeline vkPipeline();
 
   private:
-  std::shared_ptr<Device> device_;
+    std::shared_ptr<Device> device_;
 
     VkPipeline pipeline_ = VK_NULL_HANDLE;
 };
@@ -66,51 +65,33 @@ class DynamicGraphicsPipelineBuilder {
 
   private:
     constexpr static VkDynamicState dynamicState_[] = {
-        // VkPipelineViewportStateCreateInfo
-        VK_DYNAMIC_STATE_VIEWPORT, // pViewports
-        VK_DYNAMIC_STATE_SCISSOR,  // pScissors
-        // uint32_t viewportCount;
-        // uint32_t scissorCount;
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR,
 
-        // VkPipelineDepthStencilStateCreateInfo
-        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,    // depthTestEnable
-        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,   // depthWriteEnable
-        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,     // depthCompareOp
-        VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,  // stencilTestEnable
-        VK_DYNAMIC_STATE_STENCIL_OP,           // {front, back}::{failOp, passOp, depthFailOp, compareOp}
-        VK_DYNAMIC_STATE_STENCIL_REFERENCE,    // {front, back}::reference
-        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, // {front, back}::compareMask
-        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,   // {front, back}::writeMask
-        // VkBool32 depthBoundsTestEnable;
-        // float minDepthBounds;
-        // float maxDepthBounds;
+        VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+        VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
+        VK_DYNAMIC_STATE_STENCIL_OP,
+        VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
 
-        // VkPipelineInputAssemblyStateCreateInfo
-        // VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY, // topology, not used, topology should paired with shader
-        // VkBool32 primitiveRestartEnable;
+        VK_DYNAMIC_STATE_CULL_MODE,
+        VK_DYNAMIC_STATE_FRONT_FACE,
+        VK_DYNAMIC_STATE_POLYGON_MODE_EXT,
+        VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE,
+        VK_DYNAMIC_STATE_DEPTH_BIAS,
+        VK_DYNAMIC_STATE_LINE_WIDTH,
 
-        // VkPipelineRasterizationStateCreateInfo
-        VK_DYNAMIC_STATE_CULL_MODE,         // cullMode
-        VK_DYNAMIC_STATE_FRONT_FACE,        // frontFace
-        VK_DYNAMIC_STATE_POLYGON_MODE_EXT,  // polygonMode
-        VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE, // depthBiasEnable
-        VK_DYNAMIC_STATE_DEPTH_BIAS,        // {depthBiasConstantFactor, depthBiasClamp, depthBiasSlopeFactor}
-        VK_DYNAMIC_STATE_LINE_WIDTH,        // lineWidth
-        // VkBool32 depthClampEnable;
-        // VkBool32 rasterizerDiscardEnable;
+        VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,
+        VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT,
+        VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT,
 
-        // VkPipelineColorBlendAttachmentState contained in VkPipelineColorBlendStateCreateInfo for every attachment
-        VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,   // blendEnable
-        VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT, // {srcColorBlendFactor, dstColorBlendFactor, colorBlendOp,
-                                                   // srcAlphaBlendFactor, dstAlphaBlendFactor, alphaBlendOp}
-        VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT,     // colorWriteMask
+        VK_DYNAMIC_STATE_LOGIC_OP_EXT,
+        VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT,
+        VK_DYNAMIC_STATE_BLEND_CONSTANTS,
 
-        // VkPipelineColorBlendStateCreateInfo
-        VK_DYNAMIC_STATE_LOGIC_OP_EXT,        // logicOp
-        VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT, // logicOpEnable
-        VK_DYNAMIC_STATE_BLEND_CONSTANTS,     // blendConstants
-
-        // VK_DYNAMIC_STATE_VERTEX_INPUT_EXT // not used
     };
 
     VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo_{
@@ -194,4 +175,4 @@ DynamicGraphicsPipelineBuilder::defineVertexInputState(const VertexLayoutInfo &v
 
 template <>
 DynamicGraphicsPipelineBuilder &DynamicGraphicsPipelineBuilder::defineVertexInputState<void>();
-} // namespace vk
+}

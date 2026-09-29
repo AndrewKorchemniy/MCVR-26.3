@@ -5,7 +5,7 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;   // R: visibility, G: hitDist, B: NoL
+layout(set = 0, binding = 0, rgba16f) uniform image2D shadowInputImage;
 layout(set = 0, binding = 1, rgba16f) uniform image2D shadowOutputImage;
 layout(set = 0, binding = 2, r32f) uniform image2D linearDepthImage;
 layout(set = 0, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
@@ -43,8 +43,7 @@ void main() {
     float centerHit = center.y;
     float centerNoL = clamp(center.z, 0.0, 1.0);
     float centerA = center.w;
-    
-    
+
     float centerDepth = imageLoad(linearDepthImage, pixel).r;
     vec3 centerNormal = normalizeSafe(imageLoad(normalRoughnessImage, pixel).xyz);
 
@@ -57,7 +56,6 @@ void main() {
         return;
     }
 
-    // Local edge + variance for edge-noise detection
     float minV = 1.0;
     float maxV = 0.0;
     float sumV = 0.0;
@@ -82,12 +80,12 @@ void main() {
 
     float edgeBoost = smoothstep(0.05, 0.35, edge);
     float noiseBoost = smoothstep(0.01, 0.06, varianceV);
-    // Always apply a light blur to reduce static grain; stronger on edges/noisy areas
+
     float smoothStrength = max(max(edgeBoost, noiseBoost), 0.20);
 
     float softness = smoothstep(0.0, 10.0, centerHit);
-    float occlusion = clamp(centerHit / 10.0, 0.0, 1.0); // shadow thickness / confidence
-    // Penumbra size proxy (hitDist + NoL + light size)
+    float occlusion = clamp(centerHit / 10.0, 0.0, 1.0);
+
     float lightSize = 1.5;
     float penumbra = (centerHit / max(centerDepth, 1e-3)) * lightSize;
     penumbra *= mix(0.6, 1.4, 1.0 - centerNoL);
@@ -134,10 +132,8 @@ void main() {
             float shadowDiff = abs(centerVis - v);
             float nolDiff = abs(centerNoL - vhdn.z);
 
-            float w = exp(-depthDiff / phiDepth)
-                    * exp(-normalDiff / phiNormal)
-                    * exp(-shadowDiff / phiShadow)
-                    * exp(-nolDiff / phiNoL);
+            float w = exp(-depthDiff / phiDepth) * exp(-normalDiff / phiNormal) * exp(-shadowDiff / phiShadow) *
+                      exp(-nolDiff / phiNoL);
 
             float dist2 = float(dx * dx + dy * dy);
             w *= exp(-dist2 / (2.0 * sigma * sigma));
@@ -152,12 +148,11 @@ void main() {
     float outVis = sumVis / max(sumW, 1e-4);
     float outHit = sumHit / max(sumW, 1e-4);
     float outNoL = clamp(sumNoL / max(sumW, 1e-4), 0.0, 1.0);
-    // Pull noisy edges toward local mean / median to remove dirty speckles
+
     float meanMix = (0.45 * noiseBoost + 0.25 * edgeBoost) * mix(0.7, 1.4, occlusion) * mix(1.0, 1.6, softBoost);
     meanMix = clamp(meanMix, 0.0, 0.70);
     outVis = mix(outVis, meanV, meanMix);
 
-    // Edge-only median clamp (robust against isolated outliers)
     float vals[9];
     int idx = 0;
     for (int dy = -1; dy <= 1; ++dy) {

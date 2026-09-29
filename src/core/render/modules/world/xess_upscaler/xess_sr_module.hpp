@@ -71,7 +71,7 @@ class XessSrModule : public WorldModule, public SharedObject<XessSrModule> {
     uint32_t renderHeight_ = 0;
     uint32_t displayWidth_ = 0;
     uint32_t displayHeight_ = 0;
-    QualityMode qualityMode_ = QualityMode::Quality;
+    QualityMode qualityMode_ = QualityMode::Balanced;
     float preExposure_ = 1.0f;
     bool xessEnabled_ = true;
 
@@ -101,6 +101,7 @@ class XessSrModuleContext : public WorldModuleContext {
                         std::shared_ptr<XessSrModule> xessModule);
 
     void render() override;
+    bool populateFrameGenerationInputs(mcvr::FrameGenerationInputs &inputs) override;
 
     std::shared_ptr<vk::DeviceLocalImage> inputColorImage;
     std::shared_ptr<vk::DeviceLocalImage> inputDepthImage;

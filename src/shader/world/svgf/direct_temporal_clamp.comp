@@ -5,7 +5,6 @@
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-// Using Samplers + texelFetch for optimized data access
 layout(set = 0, binding = 0) uniform sampler2D directInputSampler;
 layout(set = 0, binding = 1, rgba16f) uniform image2D directOutputImage;
 layout(set = 0, binding = 2) uniform sampler2D linearDepthSampler;
@@ -31,7 +30,6 @@ void main() {
         return;
     }
 
-    // Only clamp near shadows to avoid washing clean areas
     float shadowVis = texelFetch(shadowHistorySampler, pixel, 0).r;
     if (shadowVis < 0.0) shadowVis = 1.0;
     if (shadowVis > 0.95) {
@@ -39,7 +37,6 @@ void main() {
         return;
     }
 
-    // 17x17 luminance clamp using texelFetch
     float sum = 0.0;
     float sum2 = 0.0;
     float count = 0.0;
@@ -47,10 +44,10 @@ void main() {
         for (int dx = -8; dx <= 8; ++dx) {
             ivec2 q = pixel + ivec2(dx, dy);
             if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) continue;
-            
+
             float d = texelFetch(linearDepthSampler, q, 0).r;
             if (d >= (INF_DISTANCE * 0.5)) continue;
-            
+
             vec3 c = texelFetch(directInputSampler, q, 0).rgb;
             float l = luminance(c);
             sum += l;

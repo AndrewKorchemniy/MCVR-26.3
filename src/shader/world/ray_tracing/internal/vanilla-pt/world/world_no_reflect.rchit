@@ -60,7 +60,7 @@ layout(set = 3, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
 layout(set = 3, binding = 4, rg16f) uniform image2D motionVectorImage;
 layout(set = 3, binding = 5, r16f) uniform image2D linearDepthImage;
 
-layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer IndexBuffer {
+layout(std430, buffer_reference, buffer_reference_align = 4) readonly buffer IndexBuffer {
     uint indices[];
 }
 indexBuffer;
@@ -124,29 +124,29 @@ void main() {
         vec2 atlasUvMin = min(m0.textureUV, min(m1.textureUV, m2.textureUV));
         vec2 atlasUvMax = max(m0.textureUV, max(m1.textureUV, m2.textureUV));
 
-        // ray cone
         float coneRadiusWorld = mainRay.coneWidth + gl_HitTEXT * mainRay.coneSpread;
         vec3 dposdu, dposdv;
         computedposduDv(p0.pos, p1.pos, p2.pos, m0.textureUV, m1.textureUV, m2.textureUV, dposdu, dposdv);
         float lod = lodWithCone(textures[nonuniformEXT(textureID)], textureUV, coneRadiusWorld, dposdu, dposdv);
 
-        albedoValue = sampleTexture(textures[nonuniformEXT(textureID)], textureUV, lod, false);
+        albedoValue = resolveSurfaceTextureColor(sampleTexture(textures[nonuniformEXT(textureID)], textureUV, lod, false), alphaMode);
         albedoValue.a = resolveSurfaceAlpha(albedoValue.a * colorLayerValue.a, alphaMode);
         if (specularTextureID >= 0) {
-            specularValue = sampleTexture(textures[nonuniformEXT(specularTextureID)], textureUV, lod, false);
+            specularValue = samplePBRSpecularTexture(textures[nonuniformEXT(specularTextureID)], textureUV, atlasUvMin,
+                                                     atlasUvMax, lod, VPT_PBR_SAMPLING_MODE);
         } else {
-            specularValue = vec4(0.0);
+            specularValue = LABPBR_DEFAULT_SPECULAR;
         }
         if (normalTextureID >= 0) {
             normalValue = samplePBRTexture(textures[nonuniformEXT(normalTextureID)], textureUV, atlasUvMin, atlasUvMax,
                                            lod, VPT_PBR_SAMPLING_MODE);
         } else {
-            normalValue = vec4(0.0);
+            normalValue = LABPBR_DEFAULT_NORMAL;
         }
     } else {
         albedoValue = vec4(1.0);
-        specularValue = vec4(0.0);
-        normalValue = vec4(0.0);
+        specularValue = LABPBR_DEFAULT_SPECULAR;
+        normalValue = LABPBR_DEFAULT_NORMAL;
     }
 
     bool useGlint = hasGlint(m0.packedData);
@@ -167,11 +167,11 @@ void main() {
     albedoValue = vec4(tint, albedoValue.a);
     LabPBRMat mat = convertLabPBRMaterial(albedoValue, specularValue, normalValue);
 
-    // add glowing radiance
     mainRay.radiance += 12 * tint * mat.emission * mainRay.throughput;
     mainRay.hitT = gl_HitTEXT;
     mainRay.normal = vec3(0.0);
-    rayStoreMaterial(mainRay, albedoValue, mat.f0, mat.roughness, mat.metallic, mat.transmission, mat.ior, mat.emission);
+    rayStoreMaterial(mainRay, albedoValue, mat.f0, mat.roughness, mat.metallic, mat.transmission, mat.ior,
+                     mat.emission);
     raySetNoisy(mainRay, false);
     mainRay.hasPrevScenePos = 0u;
     raySetStop(mainRay, true);

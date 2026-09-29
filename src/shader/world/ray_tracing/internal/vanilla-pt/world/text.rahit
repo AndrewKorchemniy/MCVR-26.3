@@ -28,7 +28,7 @@ layout(set = 2, binding = 0) uniform Uniform {
     WorldUBO ubo;
 };
 
-layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer IndexBuffer {
+layout(std430, buffer_reference, buffer_reference_align = 4) readonly buffer IndexBuffer {
     uint indices[];
 }
 indexBuffer;
@@ -51,11 +51,12 @@ void main() {
     vec3 baryCoords = vec3(1.0 - (attribs.x + attribs.y), attribs.x, attribs.y);
     uint packedData = m0.packedData;
     bool useTexture = hasTexture(packedData);
-    uint textMode = getAlphaMode(packedData);
+    uint textMode = getPostTextMode(packedData);
 
-    float colorLayerAlpha = hasColorLayer(packedData) ?
-                                (baryCoords.x * m0.colorLayer + baryCoords.y * m1.colorLayer + baryCoords.z * m2.colorLayer).a :
-                                1.0;
+    float colorLayerAlpha =
+        hasColorLayer(packedData) ?
+            (baryCoords.x * m0.colorLayer + baryCoords.y * m1.colorLayer + baryCoords.z * m2.colorLayer).a :
+            1.0;
     vec4 textureColor = vec4(1.0);
     if (useTexture) {
         vec2 uv = baryCoords.x * m0.textureUV + baryCoords.y * m1.textureUV + baryCoords.z * m2.textureUV;

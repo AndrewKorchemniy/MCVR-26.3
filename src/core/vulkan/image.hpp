@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/all_extern.hpp"
+#include "core/vulkan/resource_memory_tracker.hpp"
 
 #include <vector>
 
@@ -68,6 +69,8 @@ static VkImageSubresourceLayers wholeStencilSubresourceLayers = {
 
 class Image {
   public:
+    virtual ~Image() = default;
+
     virtual uint32_t width() = 0;
     virtual uint32_t height() = 0;
     virtual uint32_t depth() = 0;
@@ -75,6 +78,8 @@ class Image {
     virtual VkFormat &vkFormat() = 0;
     virtual VkImage &vkImage() = 0;
     virtual VkImageView &vkImageView(int index = 0) = 0;
+    virtual VkImageLayout &imageLayout() = 0;
+    virtual VkImageSubresourceRange fullSubresourceRange() const = 0;
 };
 
 class SwapchainImage : public Image, public SharedObject<SwapchainImage> {
@@ -89,7 +94,8 @@ class SwapchainImage : public Image, public SharedObject<SwapchainImage> {
     VkFormat &vkFormat() override;
     VkImage &vkImage() override;
     VkImageView &vkImageView(int index = 0) override;
-    VkImageLayout &imageLayout();
+    VkImageLayout &imageLayout() override;
+    VkImageSubresourceRange fullSubresourceRange() const override;
 
   private:
     std::shared_ptr<Device> device_;
@@ -214,10 +220,7 @@ class DeviceLocalImage : public Image, public SharedObject<DeviceLocalImage> {
     );
     ~DeviceLocalImage();
 
-    // void downloadFromStagingBuffer(size_t size = -1, size_t offset = -1);
     void uploadToStagingBuffer(void *src);
-    // void downloadFromBuffer(VkCommandBuffer cmdBuffer, size_t size = -1, size_t srcOffset = -1, size_t dstOffset =
-    // -1);
     void uploadToImage(VkCommandBuffer cmdBuffer);
     void uploadToImage(std::shared_ptr<CommandBuffer> cmdBuffer);
     void
@@ -234,11 +237,12 @@ class DeviceLocalImage : public Image, public SharedObject<DeviceLocalImage> {
     VkBuffer &vkStagingBuffer();
     VkImage &vkImage() override;
     VkImageView &vkImageView(int index = 0) override;
-    VkImageLayout &imageLayout();
+    VkImageLayout &imageLayout() override;
     void *mappedPtr();
-    VkImageSubresourceRange fullSubresourceRange() const;
+    VkImageSubresourceRange fullSubresourceRange() const override;
 
     void addImageView(VkImageViewCreateInfo info);
+    void setMemoryCategory(ResourceMemoryCategory category);
 
   private:
     static VkImageAspectFlags imageAspectMask(VkImageUsageFlags usage);
@@ -267,6 +271,7 @@ class DeviceLocalImage : public Image, public SharedObject<DeviceLocalImage> {
     VkImage image_ = VK_NULL_HANDLE;
     VmaAllocation allocation_ = VK_NULL_HANDLE;
     VmaAllocationInfo allocationInfo_;
+    ResourceMemoryCategory memoryCategory_ = ResourceMemoryCategory::Other;
 
     std::vector<VkImageView> imageViews_{1};
 };
@@ -278,6 +283,12 @@ class Sampler : public SharedObject<Sampler> {
             VkFilter samplingMode,
             VkSamplerMipmapMode mipmapMode,
             VkSamplerAddressMode addressMode);
+    Sampler(std::shared_ptr<Device> device,
+            VkFilter samplingMode,
+            VkSamplerMipmapMode mipmapMode,
+            VkSamplerAddressMode addressMode,
+            bool compareEnable,
+            VkCompareOp compareOp);
     ~Sampler();
 
     VkSampler vkSamper();
@@ -291,12 +302,13 @@ class Sampler : public SharedObject<Sampler> {
     VkFilter samplingMode_;
     VkSamplerMipmapMode mipmapMode_;
     VkSamplerAddressMode addressMode_;
+    bool compareEnable_ = false;
+    VkCompareOp compareOp_ = VK_COMPARE_OP_ALWAYS;
     VkSampler samper_;
 };
 
 class ImageLoader : public SharedObject<ImageLoader> {
   public:
-    // ImageLoader(std::string imagePath, uint32_t forceChannel);
     ImageLoader(std::vector<std::string> imagePaths, uint32_t forceChannel, bool convertLinearToSrgb = true);
     ~ImageLoader();
 
@@ -314,4 +326,4 @@ class ImageLoader : public SharedObject<ImageLoader> {
     int layer_;
     std::vector<uint8_t> data_;
 };
-}; // namespace vk
+};

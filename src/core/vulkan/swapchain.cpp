@@ -3,6 +3,7 @@
 #include "core/vulkan/device.hpp"
 #include "core/vulkan/image.hpp"
 #include "core/vulkan/physical_device.hpp"
+#include "core/vulkan/result.hpp"
 #include "core/vulkan/window.hpp"
 
 #include "core/render/renderer.hpp"
@@ -10,10 +11,6 @@
 #include <algorithm>
 #include <iostream>
 #include <vector>
-
-std::ostream &swapchainCout() {
-    return std::cout << "[Swapchain] ";
-}
 
 std::ostream &swapchainCerr() {
     return std::cerr << "[Swapchain] ";
@@ -27,12 +24,7 @@ vk::Swapchain::Swapchain(std::shared_ptr<PhysicalDevice> physicalDevice,
 }
 
 VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR> &availableFormats) {
-    // can choose any format
     if (availableFormats.size() == 1 && availableFormats[0].format == VK_FORMAT_UNDEFINED) {
-#ifdef DEBUG
-        std::cout << "selected surface format: " << VK_FORMAT_R8G8B8A8_UNORM
-                  << " color space: " << VK_COLORSPACE_SRGB_NONLINEAR_KHR << std::endl;
-#endif
         return {VK_FORMAT_R8G8B8A8_UNORM, VK_COLORSPACE_SRGB_NONLINEAR_KHR};
     }
 
@@ -55,10 +47,6 @@ VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR> &av
                         << "), UNORM format unavailable, this may cause color space error" << std::endl;
     }
 
-#ifdef DEBUG
-    std::cout << "selected surface format: " << selectedFormat->format << " color space: " << selectedFormat->colorSpace
-              << std::endl;
-#endif
     return *selectedFormat;
 }
 
@@ -83,12 +71,19 @@ VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR> presentMo
         if (presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) { return presentMode; }
     }
 
-    // If mailbox is unavailable, fall back to FIFO (guaranteed to be available)
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
-void vk::Swapchain::reconstruct() {
-    // Find surface capabilities
+void vk::Swapchain::reconstruct(bool recreateSurface) {
+    if (recreateSurface) {
+        swapchainImages_.clear();
+        if (swapchain_ != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(device_->vkDevice(), swapchain_, nullptr);
+            swapchain_ = VK_NULL_HANDLE;
+        }
+        window_->reconstructSurface();
+    }
+
     VkSurfaceCapabilitiesKHR surfaceCapabilities;
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
                                                   &surfaceCapabilities) != VK_SUCCESS) {
@@ -99,18 +94,12 @@ void vk::Swapchain::reconstruct() {
     maxExtent_ = surfaceCapabilities.maxImageExtent;
     minExtent_ = surfaceCapabilities.minImageExtent;
 
-    // Determine number of images for swap chain
     imageCount_ = surfaceCapabilities.minImageCount + 1;
     imageCount_ = std::clamp(imageCount_, (uint32_t)2, (uint32_t)3);
     if (surfaceCapabilities.maxImageCount != 0 && imageCount_ > surfaceCapabilities.maxImageCount) {
         imageCount_ = surfaceCapabilities.maxImageCount;
     }
 
-#ifdef DEBUG
-    swapchainCout() << "using " << imageCount_ << " images for swap chain" << std::endl;
-#endif
-
-    // Find supported surface formats
     uint32_t formatCount;
     if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(), &formatCount,
                                              nullptr) != VK_SUCCESS ||
@@ -126,16 +115,8 @@ void vk::Swapchain::reconstruct() {
         exit(EXIT_FAILURE);
     }
 
-// Select a surface format
-#ifdef DEBUG
-    for (int i = 0; i < formatCount; i++) {
-        swapchainCout() << "Supported Format: " << surfaceFormats[i].format
-                        << " ColorSpace: " << surfaceFormats[i].colorSpace << std::endl;
-    }
-#endif
     surfaceFormat_ = chooseSurfaceFormat(surfaceFormats);
 
-    // Find supported present modes
     uint32_t presentModeCount;
     if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
                                                   &presentModeCount, nullptr) != VK_SUCCESS ||
@@ -151,13 +132,18 @@ void vk::Swapchain::reconstruct() {
         exit(EXIT_FAILURE);
     }
 
-    // Choose presentation mode (preferring MAILBOX ~= triple buffering)
     presentMode_ = choosePresentMode(presentModes);
 
-    // Select swap chain size
-    extent_ = chooseSwapExtent(surfaceCapabilities, window_->width(), window_->height());
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    GLFW_GetFramebufferSize(window_->window(), &framebufferWidth, &framebufferHeight);
+    if (framebufferWidth <= 0 || framebufferHeight <= 0) {
+        framebufferWidth = static_cast<int>(window_->width());
+        framebufferHeight = static_cast<int>(window_->height());
+    }
+    extent_ = chooseSwapExtent(surfaceCapabilities, static_cast<uint32_t>(framebufferWidth),
+                               static_cast<uint32_t>(framebufferHeight));
 
-    // Determine transformation to use (preferring no transform)
     VkSurfaceTransformFlagBitsKHR surfaceTransform;
     if (surfaceCapabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
         surfaceTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
@@ -165,8 +151,8 @@ void vk::Swapchain::reconstruct() {
         surfaceTransform = surfaceCapabilities.currentTransform;
     }
 
-    // Finally, create the swap chain
     VkSwapchainKHR oldSwapchain = swapchain_;
+    swapchainImages_.clear();
 
     VkSwapchainCreateInfoKHR createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -176,8 +162,8 @@ void vk::Swapchain::reconstruct() {
     createInfo.imageColorSpace = surfaceFormat_.colorSpace;
     createInfo.imageExtent = extent_;
     createInfo.imageArrayLayers = 1;
-    createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                            VK_IMAGE_USAGE_SAMPLED_BIT; // TODO: cancel VK_IMAGE_USAGE_SAMPLED_BIT
+    createInfo.imageUsage =
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     createInfo.queueFamilyIndexCount = 0;
     createInfo.pQueueFamilyIndices = nullptr;
@@ -187,29 +173,21 @@ void vk::Swapchain::reconstruct() {
     createInfo.clipped = VK_TRUE;
     createInfo.oldSwapchain = oldSwapchain;
 
-    if (vkCreateSwapchainKHR(device_->vkDevice(), &createInfo, nullptr, &swapchain_) != VK_SUCCESS) {
-        swapchainCerr() << "failed to create swap chain" << std::endl;
-        exit(EXIT_FAILURE);
-    } else {
-#ifdef DEBUG
-        swapchainCout() << "created swap chain" << std::endl;
-#endif
+    VkSwapchainKHR newSwapchain = VK_NULL_HANDLE;
+    VkResult createResult = vkCreateSwapchainKHR(device_->vkDevice(), &createInfo, nullptr, &newSwapchain);
+    if (createResult != VK_SUCCESS) {
+        vk::requireSuccess(createResult, "vkCreateSwapchainKHR");
     }
 
     if (oldSwapchain != VK_NULL_HANDLE) { vkDestroySwapchainKHR(device_->vkDevice(), oldSwapchain, nullptr); }
+    swapchain_ = newSwapchain;
 
-    // Store the images used by the swap chain
-    // Note: these are the images that swap chain image indices refer to
-    // Note: actual number of images may differ from requested number, since it's a lower bound
     uint32_t actualImageCount = 0;
     if (vkGetSwapchainImagesKHR(device_->vkDevice(), swapchain_, &actualImageCount, nullptr) != VK_SUCCESS ||
         actualImageCount == 0) {
         swapchainCerr() << "failed to acquire number of swap chain images" << std::endl;
         exit(EXIT_FAILURE);
     }
-#ifdef DEBUG
-    std::cout << "actualImageCount: " << actualImageCount << std::endl;
-#endif
     imageCount_ = actualImageCount;
 
     std::vector<VkImage> images(actualImageCount);
@@ -217,23 +195,15 @@ void vk::Swapchain::reconstruct() {
         swapchainCerr() << "failed to acquire swap chain images" << std::endl;
         exit(EXIT_FAILURE);
     }
-    swapchainImages_.clear();
     for (int i = 0; i < actualImageCount; i++) {
         swapchainImages_.push_back(
             SwapchainImage::create(device_, images[i], extent_.width, extent_.height, surfaceFormat_.format));
     }
-
-#ifdef DEBUG
-    swapchainCout() << "acquired swap chain images" << std::endl;
-#endif
 }
 
 vk::Swapchain::~Swapchain() {
-    vkDestroySwapchainKHR(device_->vkDevice(), swapchain_, nullptr);
-
-#ifdef DEBUG
-    swapchainCout() << "swapchain deconstructed" << std::endl;
-#endif
+    swapchainImages_.clear();
+    if (swapchain_ != VK_NULL_HANDLE) { vkDestroySwapchainKHR(device_->vkDevice(), swapchain_, nullptr); }
 }
 
 VkSwapchainKHR &vk::Swapchain::vkSwapchain() {

@@ -1,6 +1,8 @@
 #include "com_radiance_client_proxy_vulkan_ShaderProxy.h"
+#include "core/middleware/jni_export.hpp"
 
 #include "core/all_extern.hpp"
+#include "core/profiler/profiler.hpp"
 #include "core/render/buffers.hpp"
 #include "core/render/modules/ui_module.hpp"
 #include "core/render/pipeline.hpp"
@@ -10,27 +12,28 @@
 #include <algorithm>
 #include <unordered_map>
 
-namespace {
-std::string toStdString(JNIEnv *env, jstring value) {
-    if (value == nullptr) return {};
-    const char *chars = env->GetStringUTFChars(value, nullptr);
-    std::string result(chars == nullptr ? "" : chars);
-    if (chars != nullptr) { env->ReleaseStringUTFChars(value, chars); }
-    return result;
-}
-} // namespace
+class ShaderProxyJni {
+  public:
+    static std::string toStdString(JNIEnv *env, jstring value) {
+        if (value == nullptr) return {};
+        const char *chars = env->GetStringUTFChars(value, nullptr);
+        std::string result(chars == nullptr ? "" : chars);
+        if (chars != nullptr) { env->ReleaseStringUTFChars(value, chars); }
+        return result;
+    }
+};
 
-JNIEXPORT jint JNICALL Java_com_radiance_client_proxy_vulkan_ShaderProxy_registerShader(
-    JNIEnv *env,
-    jclass,
-    jstring shaderKey,
-    jint vertexFormatType,
-    jint drawMode,
-    jint uniformSize,
-    jstring vertexShaderPath,
-    jstring fragmentShaderPath,
-    jobjectArray defineNames,
-    jobjectArray defineValues) {
+JNIEXPORT jint JNICALL Java_com_radiance_client_proxy_vulkan_ShaderProxy_registerShader(JNIEnv *env,
+                                                                                        jclass,
+                                                                                        jstring shaderKey,
+                                                                                        jint vertexFormatType,
+                                                                                        jint drawMode,
+                                                                                        jint uniformSize,
+                                                                                        jstring vertexShaderPath,
+                                                                                        jstring fragmentShaderPath,
+                                                                                        jobjectArray defineNames,
+                                                                                        jobjectArray defineValues) {
+    MCVR_PROFILE_SCOPE("jni.ShaderProxy.registerShader");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return -1;
 
@@ -40,28 +43,36 @@ JNIEXPORT jint JNICALL Java_com_radiance_client_proxy_vulkan_ShaderProxy_registe
         for (jsize i = 0; i < count; ++i) {
             auto name = static_cast<jstring>(env->GetObjectArrayElement(defineNames, i));
             auto value = static_cast<jstring>(env->GetObjectArrayElement(defineValues, i));
-            definitions.emplace(toStdString(env, name), toStdString(env, value));
+            definitions.emplace(ShaderProxyJni::toStdString(env, name), ShaderProxyJni::toStdString(env, value));
             env->DeleteLocalRef(name);
             env->DeleteLocalRef(value);
         }
     }
 
     auto shaderId = framework->pipeline()->uiModule()->registerOverlayDrawShader(
-        toStdString(env, shaderKey), vertexFormatType, drawMode, uniformSize,
-        toStdString(env, vertexShaderPath), toStdString(env, fragmentShaderPath), definitions);
+        ShaderProxyJni::toStdString(env, shaderKey), vertexFormatType, drawMode, uniformSize,
+        ShaderProxyJni::toStdString(env, vertexShaderPath), ShaderProxyJni::toStdString(env, fragmentShaderPath),
+        definitions);
     return static_cast<jint>(shaderId);
 }
 
-JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_ShaderProxy_draw(
-    JNIEnv *, jclass, jint vertexId, jint indexId, jint shaderId, jint indexCount, jint indexType, jlong uniformPtr,
-    jint uniformSize) {
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_ShaderProxy_draw(JNIEnv *,
+                                                                              jclass,
+                                                                              jint vertexId,
+                                                                              jint indexId,
+                                                                              jint shaderId,
+                                                                              jint indexCount,
+                                                                              jint indexType,
+                                                                              jlong uniformPtr,
+                                                                              jint uniformSize) {
+    MCVR_PROFILE_SCOPE("jni.ShaderProxy.draw");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto vertexBuffer = Renderer::instance().buffers()->getBuffer(vertexId);
     auto indexBuffer = Renderer::instance().buffers()->getBuffer(indexId);
     uint32_t uniformOffset = 0;
-    Renderer::instance().buffers()->appendOverlayDrawUniform(
-        reinterpret_cast<uint8_t *>(uniformPtr), uniformSize, uniformOffset);
+    Renderer::instance().buffers()->appendOverlayDrawUniform(reinterpret_cast<uint8_t *>(uniformPtr), uniformSize,
+                                                             uniformOffset);
     auto context = framework->safeAcquireCurrentContext();
     auto pipelineContext = framework->pipeline()->acquirePipelineContext(context);
     pipelineContext->uiModuleContext->drawIndexed(vertexBuffer, indexBuffer, shaderId, uniformOffset, indexCount,

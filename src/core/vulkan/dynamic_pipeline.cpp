@@ -8,10 +8,6 @@
 #include <iostream>
 #include <vector>
 
-std::ostream &dynamicGraphicsPipelineCout() {
-    return std::cout << "[GraphicsPipeline] ";
-}
-
 std::ostream &dynamicGraphicsPipelineCerr() {
     return std::cerr << "[GraphicsPipeline] ";
 }
@@ -21,10 +17,6 @@ vk::DynamicGraphicsPipeline::DynamicGraphicsPipeline(std::shared_ptr<Device> dev
 
 vk::DynamicGraphicsPipeline::~DynamicGraphicsPipeline() {
     vkDestroyPipeline(device_->vkDevice(), pipeline_, nullptr);
-
-#ifdef DEBUG
-    dynamicGraphicsPipelineCout() << "graphics pipeline deconstructed" << std::endl;
-#endif
 }
 
 VkPipeline vk::DynamicGraphicsPipeline::vkPipeline() {
@@ -105,11 +97,9 @@ vk::DynamicGraphicsPipelineBuilder::defineInputAssemblyState(VkPrimitiveTopology
 }
 
 std::shared_ptr<vk::DynamicGraphicsPipeline> vk::DynamicGraphicsPipelineBuilder::build(std::shared_ptr<Device> device) {
-    // Filter dynamic states based on device features
     std::vector<VkDynamicState> filteredDynamicStates;
     for (uint32_t i = 0; i < sizeof(dynamicState_) / sizeof(*dynamicState_); i++) {
         VkDynamicState state = dynamicState_[i];
-        // Skip LOGIC_OP states if feature is not enabled
         if ((state == VK_DYNAMIC_STATE_LOGIC_OP_EXT || state == VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT) &&
             !device->hasExtendedDynamicState2LogicOp()) {
             continue;
@@ -142,14 +132,10 @@ std::shared_ptr<vk::DynamicGraphicsPipeline> vk::DynamicGraphicsPipelineBuilder:
     pipelineCreateInfo.basePipelineIndex = -1;
 
     VkPipeline pipeline;
-    if (vkCreateGraphicsPipelines(device->vkDevice(), VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline) !=
+    if (vkCreateGraphicsPipelines(device->vkDevice(), device->vkPipelineCache(), 1, &pipelineCreateInfo, nullptr, &pipeline) !=
         VK_SUCCESS) {
         dynamicGraphicsPipelineCerr() << "failed to create graphics pipeline" << std::endl;
         exit(EXIT_FAILURE);
-    } else {
-#ifdef DEBUG
-        dynamicGraphicsPipelineCout() << "created dynamic graphics pipeline" << std::endl;
-#endif
     }
 
     return std::make_shared<DynamicGraphicsPipeline>(device, pipeline);

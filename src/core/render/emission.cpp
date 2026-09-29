@@ -1,18 +1,17 @@
 #include "core/render/emission.hpp"
 
+#include "core/profiler/profiler.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
-namespace {
+float calculateRestirLightBoost(float logicalArea) {
+    if (!std::isfinite(logicalArea) || logicalArea <= 0.0f) { return 1.0f; }
+    if (logicalArea >= 1.0f) { return 1.0f; }
 
-uint64_t buildCellStableKey(uint64_t tileKey, uint32_t localCellIndex) {
-    uint64_t seed = tileKey;
-    seed ^= static_cast<uint64_t>(localCellIndex) + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-    return seed;
+    return std::cbrt(logicalArea) / logicalArea;
 }
-
-} // namespace
 
 void EmissionCellRTree::clear() {
     root_.reset();
@@ -37,17 +36,13 @@ float EmissionCellRTree::area(const Rect &rect) {
 
 EmissionCellRTree::Rect EmissionCellRTree::computeNodeRect(const Node &node) {
     Rect rect = node.entries.front().rect;
-    for (size_t i = 1; i < node.entries.size(); i++) {
-        rect = combineRect(rect, node.entries[i].rect);
-    }
+    for (size_t i = 1; i < node.entries.size(); i++) { rect = combineRect(rect, node.entries[i].rect); }
     return rect;
 }
 
 EmissionCellRTree::Rect EmissionCellRTree::computeEntriesRect(const EntryList &entries) {
     Rect rect = entries.front().rect;
-    for (size_t i = 1; i < entries.size(); i++) {
-        rect = combineRect(rect, entries[i].rect);
-    }
+    for (size_t i = 1; i < entries.size(); i++) { rect = combineRect(rect, entries[i].rect); }
     return rect;
 }
 
@@ -71,27 +66,23 @@ EmissionCellRTree::Entry EmissionCellRTree::makeChildEntry(std::unique_ptr<Node>
 
 void EmissionCellRTree::collectLeafEntries(Node &node, EntryList &out) {
     if (node.leaf) {
-        for (auto &entry : node.entries) {
-            out.push_back(std::move(entry));
-        }
+        for (auto &entry : node.entries) { out.push_back(std::move(entry)); }
         node.entries.clear();
         return;
     }
 
-    for (auto &entry : node.entries) {
-        collectLeafEntries(*entry.child, out);
-    }
+    for (auto &entry : node.entries) { collectLeafEntries(*entry.child, out); }
     node.entries.clear();
 }
 
 std::unique_ptr<EmissionCellRTree::Node> EmissionCellRTree::splitNode(Node &node) {
     EntryList entries = std::move(node.entries);
     node.entries.clear();
-    node.entries.reserve(kMaxEntries);
+    node.entries.reserve(MAX_ENTRIES);
 
     auto sibling = std::make_unique<Node>();
     sibling->leaf = node.leaf;
-    sibling->entries.reserve(kMaxEntries);
+    sibling->entries.reserve(MAX_ENTRIES);
 
     std::vector<bool> assigned(entries.size(), false);
 
@@ -100,8 +91,8 @@ std::unique_ptr<EmissionCellRTree::Node> EmissionCellRTree::splitNode(Node &node
     float maxWaste = std::numeric_limits<float>::lowest();
     for (size_t i = 0; i < entries.size(); i++) {
         for (size_t j = i + 1; j < entries.size(); j++) {
-            float waste = area(combineRect(entries[i].rect, entries[j].rect)) - area(entries[i].rect) -
-                          area(entries[j].rect);
+            float waste =
+                area(combineRect(entries[i].rect, entries[j].rect)) - area(entries[i].rect) - area(entries[j].rect);
             if (waste > maxWaste) {
                 maxWaste = waste;
                 seedA = i;
@@ -120,7 +111,7 @@ std::unique_ptr<EmissionCellRTree::Node> EmissionCellRTree::splitNode(Node &node
 
     size_t remaining = entries.size() - 2;
     while (remaining > 0) {
-        if (node.entries.size() + remaining == kMinEntries) {
+        if (node.entries.size() + remaining == MIN_ENTRIES) {
             for (size_t i = 0; i < entries.size(); i++) {
                 if (!assigned[i]) {
                     assignEntry(node, i);
@@ -130,7 +121,7 @@ std::unique_ptr<EmissionCellRTree::Node> EmissionCellRTree::splitNode(Node &node
             break;
         }
 
-        if (sibling->entries.size() + remaining == kMinEntries) {
+        if (sibling->entries.size() + remaining == MIN_ENTRIES) {
             for (size_t i = 0; i < entries.size(); i++) {
                 if (!assigned[i]) {
                     assignEntry(*sibling, i);
@@ -146,9 +137,7 @@ std::unique_ptr<EmissionCellRTree::Node> EmissionCellRTree::splitNode(Node &node
         size_t chosenIndex = 0;
         float bestDiff = std::numeric_limits<float>::lowest();
         for (size_t i = 0; i < entries.size(); i++) {
-            if (assigned[i]) {
-                continue;
-            }
+            if (assigned[i]) { continue; }
 
             float enlargeA = enlargement(rectA, entries[i].rect);
             float enlargeB = enlargement(rectB, entries[i].rect);
@@ -192,8 +181,7 @@ size_t EmissionCellRTree::chooseSubtree(const Node &node, const Rect &rect) {
     for (size_t i = 0; i < node.entries.size(); i++) {
         float currentEnlargement = enlargement(node.entries[i].rect, rect);
         float currentArea = area(node.entries[i].rect);
-        if (currentEnlargement < bestEnlargement ||
-            (currentEnlargement == bestEnlargement && currentArea < bestArea)) {
+        if (currentEnlargement < bestEnlargement || (currentEnlargement == bestEnlargement && currentArea < bestArea)) {
             bestIndex = i;
             bestEnlargement = currentEnlargement;
             bestArea = currentArea;
@@ -215,15 +203,11 @@ bool EmissionCellRTree::removeRecursive(Node &node, const Rect &rect, const Valu
     }
 
     for (auto it = node.entries.begin(); it != node.entries.end(); ++it) {
-        if (!intersects(it->rect, rect)) {
-            continue;
-        }
+        if (!intersects(it->rect, rect)) { continue; }
 
-        if (!removeRecursive(*it->child, rect, value, reinserts)) {
-            continue;
-        }
+        if (!removeRecursive(*it->child, rect, value, reinserts)) { continue; }
 
-        if (it->child->entries.size() < kMinEntries) {
+        if (it->child->entries.size() < MIN_ENTRIES) {
             collectLeafEntries(*it->child, reinserts);
             node.entries.erase(it);
         } else {
@@ -240,17 +224,13 @@ void EmissionCellRTree::searchRecursive(const Node &node,
                                         std::vector<std::shared_ptr<const EmissionCell>> &out) {
     if (node.leaf) {
         for (const auto &entry : node.entries) {
-            if (intersects(entry.rect, rect) && entry.value != nullptr) {
-                out.push_back(entry.value);
-            }
+            if (intersects(entry.rect, rect) && entry.value != nullptr) { out.push_back(entry.value); }
         }
         return;
     }
 
     for (const auto &entry : node.entries) {
-        if (entry.child != nullptr && intersects(entry.rect, rect)) {
-            searchRecursive(*entry.child, rect, out);
-        }
+        if (entry.child != nullptr && intersects(entry.rect, rect)) { searchRecursive(*entry.child, rect, out); }
     }
 }
 
@@ -264,9 +244,7 @@ void EmissionCellRTree::insertEntry(Entry entry) {
 
     std::unique_ptr<Node> splitNodeOut;
     insertRecursive(*root_, std::move(entry), splitNodeOut);
-    if (splitNodeOut == nullptr) {
-        return;
-    }
+    if (splitNodeOut == nullptr) { return; }
 
     auto newRoot = std::make_unique<Node>();
     newRoot->leaf = false;
@@ -278,9 +256,7 @@ void EmissionCellRTree::insertEntry(Entry entry) {
 void EmissionCellRTree::insertRecursive(Node &node, Entry entry, std::unique_ptr<Node> &splitNodeOut) {
     if (node.leaf) {
         node.entries.push_back(std::move(entry));
-        if (node.entries.size() > kMaxEntries) {
-            splitNodeOut = splitNode(node);
-        }
+        if (node.entries.size() > MAX_ENTRIES) { splitNodeOut = splitNode(node); }
         return;
     }
 
@@ -291,9 +267,7 @@ void EmissionCellRTree::insertRecursive(Node &node, Entry entry, std::unique_ptr
 
     if (childSplit != nullptr) {
         node.entries.push_back(makeChildEntry(std::move(childSplit)));
-        if (node.entries.size() > kMaxEntries) {
-            splitNodeOut = splitNode(node);
-        }
+        if (node.entries.size() > MAX_ENTRIES) { splitNodeOut = splitNode(node); }
     }
 }
 
@@ -302,15 +276,11 @@ void EmissionCellRTree::insert(const Rect &rect, const Value &value) {
 }
 
 bool EmissionCellRTree::remove(const Rect &rect, const Value &value) {
-    if (root_ == nullptr) {
-        return false;
-    }
+    if (root_ == nullptr) { return false; }
 
     EntryList reinserts;
     bool removed = removeRecursive(*root_, rect, value, reinserts);
-    if (!removed) {
-        return false;
-    }
+    if (!removed) { return false; }
 
     if (root_->entries.empty()) {
         root_.reset();
@@ -318,17 +288,13 @@ bool EmissionCellRTree::remove(const Rect &rect, const Value &value) {
         root_ = std::move(root_->entries[0].child);
     }
 
-    for (auto &entry : reinserts) {
-        insertEntry(std::move(entry));
-    }
+    for (auto &entry : reinserts) { insertEntry(std::move(entry)); }
     return true;
 }
 
 void EmissionCellRTree::search(const Rect &rect, std::vector<std::shared_ptr<const EmissionCell>> &out) const {
     out.clear();
-    if (root_ == nullptr) {
-        return;
-    }
+    if (root_ == nullptr) { return; }
     searchRecursive(*root_, rect, out);
 }
 
@@ -352,45 +318,76 @@ EmissionCellRTree::Rect Emission::buildRect(const glm::vec2 &uvMin, const glm::v
     };
 }
 
+int Emission::occupancyCoord(float uv) {
+    const int coord = static_cast<int>(std::floor(uv * static_cast<float>(OCCUPANCY_GRID_SIZE)));
+    return std::clamp(coord, 0, OCCUPANCY_GRID_SIZE - 1);
+}
+
+void Emission::markTextureOccupancy(TextureOccupancy &occupancy, const EmissionCell &cell) {
+    if (cell.avgEmission <= 0.0f) { return; }
+
+    const glm::vec2 uvMin = glm::min(cell.uvMin, cell.uvMax);
+    const glm::vec2 uvMax = glm::max(cell.uvMin, cell.uvMax);
+    if (uvMax.x < 0.0f || uvMax.y < 0.0f || uvMin.x > 1.0f || uvMin.y > 1.0f) { return; }
+
+    const int minX = occupancyCoord(uvMin.x);
+    const int minY = occupancyCoord(uvMin.y);
+    const int maxX = occupancyCoord(uvMax.x);
+    const int maxY = occupancyCoord(uvMax.y);
+
+    for (int y = minY; y <= maxY; y++) {
+        for (int x = minX; x <= maxX; x++) {
+            occupancy.occupiedCells.set(static_cast<size_t>(y * OCCUPANCY_GRID_SIZE + x));
+        }
+    }
+    occupancy.hasEmissionCells = true;
+}
+
+void Emission::rebuildTextureOccupancy(TextureState &state) {
+    state.occupancy = {};
+    for (const auto &[tileKey, cells] : state.tiles) {
+        (void)tileKey;
+        for (const auto &cell : cells) {
+            if (cell != nullptr) { markTextureOccupancy(state.occupancy, *cell); }
+        }
+    }
+}
+
 void Emission::clearTextureState(TextureState &state) {
     state.tiles.clear();
     state.tree = nullptr;
+    state.occupancy = {};
     state.version++;
 }
 
 void Emission::reset() {
+    MCVR_PROFILE_SCOPE("native.Emission.reset");
     std::unique_lock lock(mtx_);
-    for (auto &state : texturesState_) {
-        clearTextureState(state);
-    }
+    for (auto &state : texturesState_) { clearTextureState(state); }
+    revision_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Emission::resetTexture(uint32_t textureID) {
-    if (textureID >= texturesState_.size()) {
-        return;
-    }
+    MCVR_PROFILE_SCOPE("native.Emission.resetTexture");
+    if (textureID >= texturesState_.size()) { return; }
 
     std::unique_lock lock(mtx_);
     clearTextureState(texturesState_[textureID]);
+    revision_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Emission::updateTile(uint32_t textureID, uint64_t tileKey, const EmissionCellUpload *cells, int cellCount) {
-    if (textureID >= texturesState_.size()) {
-        return;
-    }
+    MCVR_PROFILE_SCOPE("native.Emission.updateTile");
+    if (textureID >= texturesState_.size()) { return; }
 
     std::unique_lock lock(mtx_);
     auto &state = texturesState_[textureID];
-    if (state.tree == nullptr) {
-        state.tree = std::make_unique<EmissionCellRTree>();
-    }
+    if (state.tree == nullptr) { state.tree = std::make_unique<EmissionCellRTree>(); }
 
     auto existingIter = state.tiles.find(tileKey);
     if (existingIter != state.tiles.end()) {
         for (const auto &cell : existingIter->second) {
-            if (cell == nullptr) {
-                continue;
-            }
+            if (cell == nullptr) { continue; }
             state.tree->remove(buildRect(*cell), cell);
         }
         state.tiles.erase(existingIter);
@@ -401,38 +398,69 @@ void Emission::updateTile(uint32_t textureID, uint64_t tileKey, const EmissionCe
         newCells.reserve(static_cast<size_t>(cellCount));
         for (int cellIndex = 0; cellIndex < cellCount; cellIndex++) {
             const EmissionCellUpload &upload = cells[cellIndex];
+            if (upload.avgEmission <= 0.0f) { continue; }
+
             auto cell = std::make_shared<EmissionCell>();
             cell->uvMin = glm::vec2(upload.u0, upload.v0);
             cell->uvMax = glm::vec2(upload.u1, upload.v1);
             cell->avgEmission = std::max(upload.avgEmission, 0.0f);
             cell->avgColor = glm::vec3(upload.avgR, upload.avgG, upload.avgB);
-            cell->stableKey = buildCellStableKey(tileKey, static_cast<uint32_t>(cellIndex));
+            cell->stableKey = hashCombine64(tileKey, static_cast<uint32_t>(cellIndex));
 
             state.tree->insert(buildRect(*cell), cell);
             newCells.push_back(std::move(cell));
         }
     }
 
-    if (!newCells.empty()) {
-        state.tiles.emplace(tileKey, std::move(newCells));
-    }
+    if (!newCells.empty()) { state.tiles.emplace(tileKey, std::move(newCells)); }
+    rebuildTextureOccupancy(state);
     state.version++;
+    revision_.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool Emission::copyTextureOccupancy(uint32_t textureID, TextureOccupancy &occupancy) const {
+    occupancy = {};
+    if (textureID >= texturesState_.size()) { return false; }
+
+    std::shared_lock lock(mtx_);
+    const auto &state = texturesState_[textureID];
+    occupancy = state.occupancy;
+    return occupancy.hasEmissionCells;
+}
+
+bool Emission::textureOccupancyOverlaps(const TextureOccupancy &occupancy,
+                                        const glm::vec2 &uvMin,
+                                        const glm::vec2 &uvMax) {
+    if (!occupancy.hasEmissionCells) { return false; }
+
+    const glm::vec2 queryMin = glm::min(uvMin, uvMax);
+    const glm::vec2 queryMax = glm::max(uvMin, uvMax);
+    if (queryMax.x < 0.0f || queryMax.y < 0.0f || queryMin.x > 1.0f || queryMin.y > 1.0f) { return false; }
+
+    const int minX = occupancyCoord(queryMin.x);
+    const int minY = occupancyCoord(queryMin.y);
+    const int maxX = occupancyCoord(queryMax.x);
+    const int maxY = occupancyCoord(queryMax.y);
+
+    for (int y = minY; y <= maxY; y++) {
+        for (int x = minX; x <= maxX; x++) {
+            if (occupancy.occupiedCells.test(static_cast<size_t>(y * OCCUPANCY_GRID_SIZE + x))) { return true; }
+        }
+    }
+    return false;
 }
 
 void Emission::collectCells(uint32_t textureID,
                             const glm::vec2 &uvMin,
                             const glm::vec2 &uvMax,
                             std::vector<std::shared_ptr<const EmissionCell>> &out) const {
+    MCVR_PROFILE_SCOPE("native.Emission.collectCells");
     out.clear();
-    if (textureID >= texturesState_.size()) {
-        return;
-    }
+    if (textureID >= texturesState_.size()) { return; }
 
     std::shared_lock lock(mtx_);
     const auto &state = texturesState_[textureID];
-    if (state.tree == nullptr) {
-        return;
-    }
+    if (state.tree == nullptr) { return; }
 
     state.tree->search(buildRect(uvMin, uvMax), out);
 }

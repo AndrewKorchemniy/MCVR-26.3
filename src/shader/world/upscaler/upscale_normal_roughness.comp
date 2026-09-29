@@ -12,7 +12,9 @@ layout(push_constant) uniform NormalRoughnessUpscaleParams {
     uint srcHeight;
     uint dstWidth;
     uint dstHeight;
-} params;
+    vec2 jitter;
+}
+params;
 
 vec4 loadNormalRoughness(ivec2 coord) {
     coord = clamp(coord, ivec2(0), ivec2(int(params.srcWidth) - 1, int(params.srcHeight) - 1));
@@ -37,18 +39,14 @@ vec4 sampleBilinear(vec2 srcPixel) {
 
 void main() {
     uvec2 coord = gl_GlobalInvocationID.xy;
-    if (coord.x >= params.dstWidth || coord.y >= params.dstHeight) {
-        return;
-    }
+    if (coord.x >= params.dstWidth || coord.y >= params.dstHeight) { return; }
 
     vec2 uv = (vec2(coord) + 0.5) / vec2(params.dstWidth, params.dstHeight);
-    vec2 srcPixel = uv * vec2(params.srcWidth, params.srcHeight);
+    vec2 srcPixel = uv * vec2(params.srcWidth, params.srcHeight) - params.jitter;
     vec4 normalRoughness = sampleBilinear(srcPixel);
 
     float normalLen = length(normalRoughness.xyz);
-    if (normalLen > 1e-5) {
-        normalRoughness.xyz /= normalLen;
-    }
+    if (normalLen > 1e-5) { normalRoughness.xyz /= normalLen; }
     normalRoughness.w = clamp(normalRoughness.w, 0.0, 1.0);
 
     imageStore(normalRoughnessOut, ivec2(coord), normalRoughness);

@@ -58,7 +58,7 @@ layout(set = 3, binding = 3, rgba16f) uniform image2D normalRoughnessImage;
 layout(set = 3, binding = 4, rg16f) uniform image2D motionVectorImage;
 layout(set = 3, binding = 5, r16f) uniform image2D linearDepthImage;
 
-layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer IndexBuffer {
+layout(std430, buffer_reference, buffer_reference_align = 4) readonly buffer IndexBuffer {
     uint indices[];
 }
 indexBuffer;
@@ -92,11 +92,10 @@ void main() {
     vec3 localPos = baryCoords.x * p0.pos + baryCoords.y * p1.pos + baryCoords.z * p2.pos;
     vec3 worldPos = vec4(localPos, 1.0) * gl_ObjectToWorld3x4EXT;
 
-    vec4 texProj0 =
-        projectPosition(worldUBO.cameraProjMat * worldUBO.cameraEffectedViewMat * vec4(worldPos, 1.0));
-    vec3 color = computeEndPortalColor(texProj0, 15, worldUBO.endSkyTextureID, worldUBO.endPortalTextureID, worldUBO.gameTime);
+    vec4 texProj0 = projectPosition(worldUBO.cameraProjMat * worldUBO.cameraEffectedViewMat * vec4(worldPos, 1.0));
+    vec3 color =
+        computeEndPortalColor(texProj0, 15, worldUBO.endSkyTextureID, worldUBO.endPortalTextureID, worldUBO.gameTime);
 
-    // add glowing radiance
     mainRay.radiance += 4 * color;
     mainRay.hitT = gl_HitTEXT;
     mainRay.normal = vec3(0.0);

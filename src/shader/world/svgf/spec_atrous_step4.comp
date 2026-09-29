@@ -17,10 +17,11 @@ const int STEP_SIZE = 4;
 
 layout(push_constant) uniform PushConstants {
     float phiColor;
-} pushConstants;
-#define kPhiColor pushConstants.phiColor
+}
+pushConstants;
+#define PHI_COLOR pushConstants.phiColor
 
-const float kPhiNormal = 128.0;
+const float PHI_NORMAL = 128.0;
 
 float computeVarianceCenter(ivec2 pixel, ivec2 size) {
     const float kernel[2][2] = float[2][2](float[2](0.25, 0.125), float[2](0.125, 0.0625));
@@ -43,29 +44,37 @@ float estimateDepthFwidth(float centerDepth, ivec2 pixel, ivec2 size) {
 }
 
 float luminance(vec3 c) {
-
-    return c.x; // Y channel in YCoCg
-
+    return c.x;
 }
-vec3 normalizeSafe(vec3 v) { float len = length(v); return (len > 1e-4) ? (v / len) : vec3(0.0, 0.0, 1.0); }
+vec3 normalizeSafe(vec3 v) {
+    float len = length(v);
+    return (len > 1e-4) ? (v / len) : vec3(0.0, 0.0, 1.0);
+}
 
-float computeWeight(float depthCenter, float depthP, float phiDepth, vec3 normalCenter, vec3 normalP,
-                    float lumCenter, float lumP, float phiColor, float roughness) {
+float computeWeight(float depthCenter,
+                    float depthP,
+                    float phiDepth,
+                    vec3 normalCenter,
+                    vec3 normalP,
+                    float lumCenter,
+                    float lumP,
+                    float phiColor,
+                    float roughness) {
     float centerLum = (lumCenter + lumP) * 0.5;
     float darkRelax = smoothstep(0.0, 0.1, centerLum);
-    
-    float normalPower = mix(kPhiNormal, 32.0, roughness); 
-    normalPower = mix(4.0, normalPower, darkRelax); // Aggressive relaxation in the dark
-    
+
+    float normalPower = mix(PHI_NORMAL, 32.0, roughness);
+    normalPower = mix(4.0, normalPower, darkRelax);
+
     float dotN = dot(normalCenter, normalP);
     float wNormal = pow(max(0.0, dotN), normalPower);
     float wZ = abs(depthCenter - depthP) / max(phiDepth, 1e-4);
-    
+
     float wL = abs(lumCenter - lumP) / max(phiColor, 1e-4);
     if (dotN > 0.99 && centerLum < 0.05) {
-        wL = 0.0; // Total reuse in flat dark areas
+        wL = 0.0;
     }
-    
+
     return exp(-max(wL, 0.0) - max(wZ, 0.0)) * wNormal;
 }
 
@@ -95,14 +104,11 @@ void main() {
     float relativeDepthThreshold = max(centerDepth * 0.01, 0.1);
     float phiDepth = max(fwidthZ * float(STEP_SIZE) * depthScale, relativeDepthThreshold);
 
-    // --- ENHANCED FOR STEP 4: Dark-Aware & Variance-Guided phiL ---
     float darkAreaBoost = mix(3.5, 1.0, smoothstep(0.0, 0.2, centerLum));
-    
-    // Smooth surfaces need more blurring to hide 1spp noise
-    float basePhiL = kPhiColor;
+
+    float basePhiL = PHI_COLOR;
     if (roughness < 0.1) basePhiL *= 2.5;
-    
-    // Variance-Guided: If variance is high, increase phiL to blur more
+
     float varianceScale = 1.0 + sqrt(max(varianceForPhi, 0.0)) * 2.0;
     float phiL = max(basePhiL, 16.0) * darkAreaBoost * varianceScale;
 
@@ -124,7 +130,8 @@ void main() {
             float lum = luminance(c);
 
             float varNeighbor = imageLoad(specVarianceInput, q).r;
-            float w = computeWeight(centerDepth, d, phiDepth * length(vec2(dx, dy)), nCenter, n, centerLum, lum, phiL, roughness);
+            float w = computeWeight(centerDepth, d, phiDepth * length(vec2(dx, dy)), nCenter, n, centerLum, lum, phiL,
+                                    roughness);
 
             float wK = w * (kernel[abs(dx)] * kernel[abs(dy)] / (kernelNorm * kernelNorm));
             sumC += c * wK;

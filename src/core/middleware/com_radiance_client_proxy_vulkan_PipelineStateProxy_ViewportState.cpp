@@ -1,5 +1,6 @@
 #include "com_radiance_client_proxy_vulkan_PipelineStateProxy_ViewportState.h"
 
+#include "core/profiler/profiler.hpp"
 #include "core/render/modules/ui_module.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
@@ -8,6 +9,7 @@
 extern "C" {
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_00024ViewportState_setScissorEnabled(
     JNIEnv *, jclass, jboolean enabled) {
+    MCVR_PROFILE_SCOPE("jni.PipelineState.Viewport.setScissorEnabled");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();
@@ -17,6 +19,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_00024ViewportState_setScissor(
     JNIEnv *, jclass, jint x, jint y, jint width, jint height) {
+    MCVR_PROFILE_SCOPE("jni.PipelineState.Viewport.setScissor");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();
@@ -26,6 +29,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_
 
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_PipelineStateProxy_00024ViewportState_setViewport(
     JNIEnv *, jclass, jint x, jint y, jint width, jint height) {
+    MCVR_PROFILE_SCOPE("jni.PipelineState.Viewport.setViewport");
     auto framework = Renderer::instance().framework();
     if (framework == nullptr) return;
     auto context = framework->safeAcquireCurrentContext();

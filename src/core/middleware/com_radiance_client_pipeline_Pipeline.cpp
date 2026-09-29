@@ -1,30 +1,35 @@
 #include "com_radiance_client_pipeline_Pipeline.h"
+#include "core/middleware/jni_export.hpp"
 
-#include "core/render/modules/world/ray_tracing/ray_tracing_module.hpp"
+#include "core/profiler/profiler.hpp"
+#include "core/render/modules/world/main_render/main_render_module.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
 
-#include <iostream>
 #include <vector>
 
 JNIEXPORT void JNICALL Java_com_radiance_client_pipeline_Pipeline_buildNative(JNIEnv *, jclass, jlong paramsLongPtr) {
+    MCVR_PROFILE_SCOPE("jni.Pipeline.buildNative");
     WorldPipelineBuildParams *params = reinterpret_cast<WorldPipelineBuildParams *>(paramsLongPtr);
     auto pipeline = Renderer::instance().framework()->pipeline();
     if (pipeline != nullptr) Renderer::instance().framework()->pipeline()->buildWorldPipelineBlueprint(params);
 }
 
 JNIEXPORT void JNICALL Java_com_radiance_client_pipeline_Pipeline_collectNativeModules(JNIEnv *, jclass) {
+    MCVR_PROFILE_SCOPE("jni.Pipeline.collectNativeModules");
     Pipeline::collectWorldModules();
 }
 
 JNIEXPORT jboolean JNICALL Java_com_radiance_client_pipeline_Pipeline_isNativeRebuildActive(JNIEnv *, jclass) {
+    MCVR_PROFILE_SCOPE("jni.Pipeline.isNativeRebuildActive");
     return Pipeline::nativeRebuildActive() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL Java_com_radiance_client_pipeline_Pipeline_isNativeModuleAvailable(JNIEnv *env,
                                                                                               jclass,
                                                                                               jstring name) {
+    MCVR_PROFILE_SCOPE("jni.Pipeline.isNativeModuleAvailable");
     if (name == nullptr) return JNI_FALSE;
     const char *nativeString = env->GetStringUTFChars(name, nullptr);
     if (nativeString == nullptr) return JNI_FALSE;
@@ -33,19 +38,13 @@ JNIEXPORT jboolean JNICALL Java_com_radiance_client_pipeline_Pipeline_isNativeMo
     return available ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT jstring JNICALL Java_com_radiance_client_pipeline_Pipeline_getAttributes(JNIEnv *env,
-                                                                                   jclass,
-                                                                                   jstring name,
-                                                                                   jobjectArray attributes,
-                                                                                   jstring languageObject) {
-    if (name == nullptr) {
-        return env->NewStringUTF("{}");
-    }
+JNIEXPORT jstring JNICALL Java_com_radiance_client_pipeline_Pipeline_getAttributes(
+    JNIEnv *env, jclass, jstring name, jobjectArray attributes, jstring languageObject) {
+    MCVR_PROFILE_SCOPE("jni.Pipeline.getAttributes");
+    if (name == nullptr) { return env->NewStringUTF("{}"); }
 
     const char *moduleNameChars = env->GetStringUTFChars(name, nullptr);
-    if (moduleNameChars == nullptr) {
-        return env->NewStringUTF("{}");
-    }
+    if (moduleNameChars == nullptr) { return env->NewStringUTF("{}"); }
 
     std::vector<std::string> attributeList;
     if (attributes != nullptr) {
@@ -60,9 +59,7 @@ JNIEXPORT jstring JNICALL Java_com_radiance_client_pipeline_Pipeline_getAttribut
 
             const char *entryChars = env->GetStringUTFChars(entry, nullptr);
             attributeList.emplace_back(entryChars != nullptr ? entryChars : "");
-            if (entryChars != nullptr) {
-                env->ReleaseStringUTFChars(entry, entryChars);
-            }
+            if (entryChars != nullptr) { env->ReleaseStringUTFChars(entry, entryChars); }
             env->DeleteLocalRef(entry);
         }
     }
@@ -80,9 +77,9 @@ JNIEXPORT jstring JNICALL Java_com_radiance_client_pipeline_Pipeline_getAttribut
     env->ReleaseStringUTFChars(name, moduleNameChars);
 
     std::string result = "{}";
-    if (moduleName == std::string(RayTracingModule::NAME)) {
-        RayTracingModule rayTracingModule;
-        result = rayTracingModule.getAttributes(attributeList, language);
+    if (moduleName == std::string(MainRenderModule::NAME)) {
+        MainRenderModule mainRenderModule;
+        result = mainRenderModule.getAttributes(attributeList, language);
     }
 
     return env->NewStringUTF(result.c_str());

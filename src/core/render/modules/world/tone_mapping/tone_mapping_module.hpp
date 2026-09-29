@@ -4,64 +4,49 @@
 #include "common/singleton.hpp"
 #include "core/all_extern.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
+
 #include <chrono>
 #include <cstdint>
 
 #include "core/render/modules/world/world_module.hpp"
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldModuleContext;
 
 struct ToneMappingModuleContext;
 
-struct ToneMappingModuleExposureData {
-    float exposure;
-    float avgLogLum;
-    float padding0;
-    float padding1;
-};
-
-enum ToneMappingMethod : int32_t {
-    TONE_MAPPING_METHOD_PBR_NEUTRAL = 0,
-    TONE_MAPPING_METHOD_REINHARD = 1,
-    TONE_MAPPING_METHOD_REINHARD_WHITE_POINT = 2,
-    TONE_MAPPING_METHOD_ACES_FITTED = 3,
-    TONE_MAPPING_METHOD_ACES_FITTED_WHITE_POINT = 4,
-    TONE_MAPPING_METHOD_UNCHARTED2 = 5,
-};
-
-enum ToneMappingExposureMeteringMode : int32_t {
-    TONE_MAPPING_EXPOSURE_METERING_MODE_GLOBAL = 0,
-    TONE_MAPPING_EXPOSURE_METERING_MODE_CENTER = 1,
+struct ToneMappingTemporalState {
+    float exposureEv;
+    float measuredLogLuminance;
+    uint32_t frameSerial;
+    uint32_t valid;
 };
 
 struct ToneMappingModulePushConstant {
-    float log2Min;
-    float log2Max;
-    float epsilon;
-    float lowPercent;
-    float highPercent;
-    float middleGrey;
-    float dt;
-    float speedUp;
-    float speedDown;
-    float minExposure;
-    float maxExposure;
-    float manualExposure;
-    float exposureBias;
-    float whitePoint;
-    float saturation;
-    int toneMappingMethod;
-    int autoExposure;
-    int clampOutput;
-    int exposureMeteringMode;
-    float centerMeteringPercent;
-    float padding0;
-    float padding1;
-    float padding2;
+    float logLuminanceMin;
+    float logLuminanceMax;
+    float deltaTimeSec;
+    float exposureCeiling;
+    float targetLuminance;
+    float meteringResponse;
+    float skyMeterWeight;
+    float emissiveMeterWeight;
+    float manualExposureEv;
+    float chromaPreservation;
+    float outputContrastRange;
+    float shadowDetailFloor;
+    float shadowContrast;
+    float shadowPivot;
+    float outputOffsetEv;
+    float curveLiftLimit;
+    uint32_t flags;
+    float nightFactor;
 };
+
+static_assert(sizeof(ToneMappingTemporalState) == 16);
+static_assert(sizeof(ToneMappingModulePushConstant) == 72);
 
 class ToneMappingModule : public WorldModule, public SharedObject<ToneMappingModule> {
     friend ToneMappingModuleContext;
@@ -94,7 +79,27 @@ class ToneMappingModule : public WorldModule, public SharedObject<ToneMappingMod
     void preClose() override;
 
   private:
-    static constexpr uint32_t histSize = 256;
+    static constexpr uint32_t toneCurveSampleCount = 256;
+    static constexpr float logLuminanceMin = -24.0f;
+    static constexpr float logLuminanceMax = 4.0f;
+    static constexpr float minExposureCeilingEv = 0.0f;
+    static constexpr float maxExposureCeilingEv = 4.0f;
+    static constexpr float defaultExposureCeilingEv = 2.25f;
+    static constexpr VkImageUsageFlags distributionImageUsage =
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    static constexpr VkImageUsageFlags toneCurveImageUsage =
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    static constexpr VkPipelineStageFlags2 toneMappingComputeStages = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    static constexpr VkAccessFlags2 toneMappingComputeAccess =
+        VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+    static constexpr uint32_t manualExposureFlag = 1u << 0u;
+    static constexpr uint32_t allowNegativeExposureFlag = 1u << 1u;
+    static constexpr uint32_t segmentationMaskAvailableFlag = 1u << 2u;
+    static constexpr uint32_t resetExposureFlag = 1u << 3u;
+    static constexpr uint32_t resetToneCurveFlag = 1u << 4u;
+
+    static bool tryParseFloat(const std::string &text, float &outValue);
+    static bool parseBoolValue(const std::string &value, bool fallback);
 
     void initDescriptorTables();
     void initImages();
@@ -104,75 +109,70 @@ class ToneMappingModule : public WorldModule, public SharedObject<ToneMappingMod
     void initPipeline();
 
   private:
-    // input
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> hdrImages_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> ldrImages_;
 
-    // tone mapping
     std::vector<std::shared_ptr<vk::DescriptorTable>> descriptorTables_;
+    std::vector<std::shared_ptr<vk::Sampler>> samplers_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> luminanceDistributionImages_;
+    std::shared_ptr<vk::DeviceLocalImage> toneCurveImage_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> dummySegmentationMaskImages_;
+    std::shared_ptr<vk::DeviceLocalBuffer> temporalStateBuffer_;
 
-    std::vector<std::shared_ptr<vk::DeviceLocalBuffer>> histBuffers_;
-    std::shared_ptr<vk::DeviceLocalBuffer> exposureData_;
-
-    std::shared_ptr<vk::Shader> histShader_;
-    std::shared_ptr<vk::ComputePipeline> histPipeline_;
-
-    std::shared_ptr<vk::Shader> exposureShader_;
-    std::shared_ptr<vk::ComputePipeline> exposurePipeline_;
+    std::shared_ptr<vk::Shader> distributionShader_;
+    std::shared_ptr<vk::ComputePipeline> distributionPipeline_;
+    std::shared_ptr<vk::Shader> luminanceMeasurementShader_;
+    std::shared_ptr<vk::ComputePipeline> luminanceMeasurementPipeline_;
+    std::shared_ptr<vk::Shader> toneCurveShader_;
+    std::shared_ptr<vk::ComputePipeline> toneCurvePipeline_;
 
     std::shared_ptr<vk::Shader> vertShader_;
     std::shared_ptr<vk::Shader> fragShader_;
     std::shared_ptr<vk::RenderPass> renderPass_;
     std::vector<std::shared_ptr<vk::Framebuffer>> framebuffers_;
     std::shared_ptr<vk::GraphicsPipeline> pipeline_;
-    std::vector<std::shared_ptr<vk::Sampler>> samplers_;
 
-    float middleGrey_ = 0.18f;
-    float speedUp_ = 3.0f;
-    float speedDown_ = 3.0f;
+    float exposureCeiling_ = defaultExposureCeilingEv;
+    float targetLuminance_ = 0.18f;
+    float meteringResponse_ = 3.0f;
+    bool includeSkyInMeter_ = true;
+    float skyMeterWeight_ = 2.0f;
+    bool includeEmissiveInMeter_ = true;
+    float emissiveMeterWeight_ = 1.0f;
+    bool manualExposure_ = false;
+    float manualExposureEv_ = 4.5f;
+    bool allowNegativeExposure_ = true;
 
-    float log2Min_ = -12.0f;
-    float log2Max_ = 4.0f;
-    float epsilon_ = 1e-6f;
-    float lowPercent_ = 0.005f;
-    float highPercent_ = 0.99f;
-    float minExposure_ = 1e-4f;
-    float maxExposure_ = 1.2f;
+    float chromaPreservation_ = 0.515f;
+    float outputContrastRange_ = 6.5f;
+    float shadowDetailFloor_ = 0.02f;
+    float shadowContrast_ = 0.0f;
+    float shadowPivot_ = -8.0f;
+    float outputOffsetEv_ = 0.0f;
+    float curveLiftLimit_ = 2.75f;
 
-    float manualExposure_ = 1.0f;
-    float exposureBias_ = 0.0f;
-    float whitePoint_ = 11.2f;
-    float saturation_ = 1.0f;
-
-    int toneMappingMethod_ = TONE_MAPPING_METHOD_ACES_FITTED;
-    bool isAutoExposureEnabled_ = true;
-    bool shouldClampOutput_ = true;
-    int exposureMeteringMode_ = TONE_MAPPING_EXPOSURE_METERING_MODE_GLOBAL;
-    float centerMeteringPercent_ = 20.0f;
-
-    // output
-    std::vector<std::shared_ptr<vk::DeviceLocalImage>> ldrImages_;
+    bool hasSegmentationMask_ = false;
+    uint64_t historyGeneration_ = 1;
+    uint64_t stateHistoryGeneration_ = 0;
+    uint64_t toneCurveHistoryGeneration_ = 0;
 
     std::vector<std::shared_ptr<WorldModuleContext>> contexts_;
-
     std::chrono::time_point<std::chrono::high_resolution_clock> lastTimePoint_;
 
-    uint32_t width_ = 0, height_ = 0;
+    uint32_t width_ = 0;
+    uint32_t height_ = 0;
 };
 
 struct ToneMappingModuleContext : public WorldModuleContext, SharedObject<ToneMappingModuleContext> {
     std::weak_ptr<ToneMappingModule> toneMappingModule;
 
-    // input
     std::shared_ptr<vk::DeviceLocalImage> hdrImage;
-
-    // tone mapping
+    std::shared_ptr<vk::DeviceLocalImage> ldrImage;
+    std::shared_ptr<vk::DeviceLocalImage> luminanceDistributionImage;
+    std::shared_ptr<vk::DeviceLocalImage> toneCurveImage;
+    std::shared_ptr<vk::DeviceLocalImage> segmentationMaskImage;
     std::shared_ptr<vk::DescriptorTable> descriptorTable;
     std::shared_ptr<vk::Framebuffer> framebuffer;
-    std::shared_ptr<vk::DeviceLocalBuffer> histBuffer;
-
-    // output
-    std::shared_ptr<vk::DeviceLocalImage> ldrImage;
-
     ToneMappingModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
                              std::shared_ptr<WorldPipelineContext> worldPipelineContext,
                              std::shared_ptr<ToneMappingModule> toneMappingModule);

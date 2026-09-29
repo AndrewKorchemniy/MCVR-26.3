@@ -1,0 +1,216 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "nrd_lighting_response.glsl"
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+layout(local_size_x = 32, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D diffuseImage;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D directImage;
+layout(set = 0, binding = 2, rgba8) uniform readonly image2D albedoImage;
+layout(set = 0, binding = 3, r16f) uniform readonly image2D depthImage;
+layout(set = 0, binding = 4, rg16f) uniform readonly image2D motionImage;
+layout(set = 0, binding = 5, rg8) uniform writeonly image2D responseImage;
+layout(set = 0, binding = 8, rgba16f) uniform readonly image2D directSpecularImage;
+layout(std430, set = 0, binding = 6) readonly buffer Previous { vec4 previous[]; };
+layout(std430, set = 0, binding = 7) writeonly buffer Next { vec4 next[]; };
+layout(set = 0, binding = 9, rgba16f) uniform readonly image2D baseEmissionImage;
+layout(set = 0, binding = 12, rgba8) uniform readonly image2D specularMaterialImage;
+layout(std430, set = 0, binding = 10) readonly buffer RawPrevious { uint rawPrevious[]; };
+layout(std430, set = 0, binding = 11) writeonly buffer RawNext { uint rawNext[]; };
+layout(push_constant) uniform Mode { uint hasPrevious; float jitterDeltaX; float jitterDeltaY; } mode;
+layout(set = 0, binding = 14, r16f) uniform readonly restrict image2D directHitDistanceImage;
+layout(set = 0, binding = 13, r8) uniform writeonly image2D directConfidenceImage;
+layout(set = 0, binding = 17, rgba16f) uniform readonly restrict image2D directMotionDepthImage;
+layout(set = 0, binding = 18, rgba16f) uniform readonly image2D normalRoughnessImage;
+shared vec2 normalPartial[8][64];
+shared uint normalCounts[8][64];
+shared vec4 motionPartial[64];
+shared vec4 changePartial[64];
+
+void main() {
+    ivec2 size = imageSize(depthImage);
+    for (uint rowBatch = 0; rowBatch < 4; ++rowBatch) {
+    ivec2 p = ivec2(gl_WorkGroupID.xy) * 32 + ivec2(gl_LocalInvocationID.xy) + ivec2(0, int(rowBatch) * 8);
+    bool inBounds = all(lessThan(p, size));
+    ivec2 q = min(p, size - 1);
+    vec4 diffuse = imageLoad(diffuseImage, q);
+    vec4 direct = imageLoad(directImage, q);
+    float depth = imageLoad(depthImage, q).r;
+    vec4 albedo = imageLoad(albedoImage, q);
+    bool transmission = imageLoad(specularMaterialImage, q).a > .5;
+    bool valid = inBounds && depth > 0 && depth < 58953 && diffuse.a > 0 && albedo.a < .5 &&
+        (!transmission || any(greaterThan(albedo.rgb, vec3(.001)))) &&
+        !any(greaterThan(imageLoad(baseEmissionImage, q).rgb, vec3(0)));
+    vec3 radiance = max(diffuse.rgb * (transmission ? .5 : 1.0) + direct.rgb, vec3(0)) / max(albedo.rgb, vec3(.05));
+    float value = log2(1 + dot(radiance, vec3(.2126, .7152, .0722)) * 10000);
+    valid = valid && !isnan(value) && !isinf(value);
+    if (!valid) { value = 0; depth = 0; }
+    vec3 normal = imageLoad(normalRoughnessImage, q).xyz;
+    valid = valid && !any(isnan(normal)) && !any(isinf(normal)) && dot(normal, normal) > 1e-8;
+    uint normalBin = nrdLightingNormalBin(normal);
+    float weight = float(valid);
+    vec2 moments = vec2(value, value * value);
+    bool leader = subgroupElect();
+    for (uint bin = 0; bin < 8; ++bin) {
+        bool member = valid && normalBin == bin;
+        vec2 total = subgroupAdd(moments * float(member));
+        uint count = subgroupAdd(uint(member));
+        if (leader) {
+            normalPartial[bin][gl_SubgroupID] = total + (rowBatch == 0 ? vec2(0) : normalPartial[bin][gl_SubgroupID]);
+            normalCounts[bin][gl_SubgroupID] = count + (rowBatch == 0 ? 0u : normalCounts[bin][gl_SubgroupID]);
+        }
+    }
+    vec2 pixelMotion = imageLoad(motionImage, q).xy;
+    if (any(isnan(pixelMotion)) || any(isinf(pixelMotion))) pixelMotion = vec2(0);
+        vec4 receiver = imageLoad(directMotionDepthImage, q);
+        bool receiverValid = receiver.z > 0 && receiver.z < 58953 && receiver.w > 0 && receiver.w < 58953 &&
+            !any(isnan(receiver)) && !any(isinf(receiver));
+        float directDepth = receiverValid ? receiver.z : imageLoad(depthImage, q).r;
+        float directPreviousDepth = receiverValid ? receiver.w : abs(imageLoad(baseEmissionImage, q).a);
+        vec2 directMotion = receiverValid ? receiver.xy : pixelMotion;
+        bool dynamicBlocker = imageLoad(directHitDistanceImage, q).r < -1e-6;
+        bool directValid = inBounds && albedo.a < .5 && direct.a > 0 &&
+            directDepth > 0 && directDepth < 58953 &&
+            !any(isnan(direct.rgb)) && !any(isinf(direct.rgb));
+        float directValue = directValid ? log2(1.0 + dot(max(direct.rgb, vec3(0)) / max(albedo.rgb, vec3(.05)),
+            vec3(.2126, .7152, .0722)) * 1000.0) : 0.0;
+        float directOld = 0, directWeight = 0, dynamicWeight = 0;
+        if (mode.hasPrevious != 0 && directValid) {
+            ivec2 oldPixel = ivec2(floor(vec2(p) + directMotion + vec2(mode.jitterDeltaX, mode.jitterDeltaY) + .5));
+            if (all(greaterThanEqual(oldPixel, ivec2(0))) && all(lessThan(oldPixel, size))) {
+                vec2 old = unpackHalf2x16(rawPrevious[size.x * size.y + oldPixel.y * size.x + oldPixel.x]);
+                if (old.y != 0 && abs(abs(old.y) - directPreviousDepth) <= max(.03, directPreviousDepth * .01)) {
+                    directOld = old.x;
+                    directWeight = 1.0;
+                    dynamicWeight = old.y < 0 ? 1.0 : 0.0;
+                }
+            }
+        }
+        if (inBounds) {
+            float change = directWeight > .2 && (dynamicBlocker || dynamicWeight > .05) ?
+                smoothstep(.1, .5, abs(directValue - directOld / directWeight)) : 0.0;
+            int index = size.x * size.y + p.y * size.x + p.x;
+            rawNext[index] = packHalf2x16(vec2(directValue, directValid ? (dynamicBlocker ? -directDepth : directDepth) : 0));
+            imageStore(directConfidenceImage, p, vec4(1.0 - .75 * change));
+        }
+    float oldValue = 0.0, oldWeight = 0.0;
+    if (valid && mode.hasPrevious != 0 && length(pixelMotion) >= .01) {
+        vec2 position = vec2(p) + pixelMotion + vec2(mode.jitterDeltaX, mode.jitterDeltaY);
+        ivec2 base = ivec2(floor(position));
+        vec2 f = fract(position);
+        float previousDepth = abs(imageLoad(baseEmissionImage, q).a);
+        for (int y = 0; y < 2; ++y)
+            for (int x = 0; x < 2; ++x) {
+                ivec2 oldPixel = base + ivec2(x, y);
+                if (any(lessThan(oldPixel, ivec2(0))) || any(greaterThanEqual(oldPixel, size))) continue;
+                vec2 old = unpackHalf2x16(rawPrevious[oldPixel.y * size.x + oldPixel.x]);
+                if (old.y <= 0 || abs(old.y - previousDepth) > max(.03, previousDepth * .02)) continue;
+                float w = (x == 0 ? 1 - f.x : f.x) * (y == 0 ? 1 - f.y : f.y);
+                oldValue += old.x * w;
+                oldWeight += w;
+            }
+    }
+    float matched = float(valid && oldWeight > .2);
+    float difference = matched > 0 ? value - oldValue / oldWeight : 0;
+    vec4 change = subgroupAdd(vec4(difference, difference * difference, 1, 0) * matched);
+    if (inBounds) rawNext[p.y * size.x + p.x] = packHalf2x16(vec2(value, valid ? depth : 0));
+    float directFraction = dot(max(direct.rgb, vec3(0)), vec3(.2126, .7152, .0722)) /
+        max(dot(max(diffuse.rgb + direct.rgb, vec3(0)), vec3(.2126, .7152, .0722)), .0001);
+    if (!valid) directFraction = 0;
+    vec4 mv = subgroupAdd(vec4(pixelMotion, length(pixelMotion), directFraction) * weight);
+    vec3 rawDirect = max(direct.rgb, vec3(0)) + max(imageLoad(directSpecularImage, q).rgb, vec3(0));
+    uint lit = subgroupAdd(uint(inBounds && any(greaterThan(rawDirect, vec3(0)))));
+    if (leader) {
+        uint partialIndex = gl_SubgroupID;
+        vec4 oldMotion = rowBatch == 0 ? vec4(0) : motionPartial[partialIndex];
+        mv += vec4(oldMotion.xyz, abs(oldMotion.w));
+        uint directBit = (floatBitsToUint(oldMotion.w) & 0x80000000u) | (lit > 0 ? 0x80000000u : 0u);
+        mv.w = uintBitsToFloat(floatBitsToUint(mv.w) | directBit);
+        motionPartial[partialIndex] = mv;
+        changePartial[partialIndex] = change + (rowBatch == 0 ? vec4(0) : changePartial[partialIndex]);
+    }
+    }
+    barrier();
+    if (gl_LocalInvocationIndex == 0) {
+        vec3 moments[8];
+        vec3 sum = vec3(0);
+        vec4 mv = vec4(0), change = vec4(0);
+        uint anyDirect = 0;
+        for (uint bin = 0; bin < 8; ++bin) {
+            moments[bin] = vec3(0);
+            for (uint i = 0; i < gl_NumSubgroups; ++i) {
+                moments[bin] += vec3(normalPartial[bin][i], float(normalCounts[bin][i]));
+            }
+            sum += moments[bin];
+        }
+        for (uint i = 0; i < gl_NumSubgroups; ++i) {
+            vec4 motion = motionPartial[i];
+            anyDirect |= floatBitsToUint(motion.w) & 0x80000000u;
+            mv += vec4(motion.xyz, abs(motion.w));
+            change += changePartial[i];
+        }
+        float emptyDirect = anyDirect == 0 ? 1.0 : 0.0;
+        float count = max(sum.z, 1);
+        float mean = sum.x / count;
+        float localLightDominance = (1.0 - smoothstep(.01, .1, mv.w / count)) *
+            (1.0 - smoothstep(7.65, 9.23, mean));
+        float moving = smoothstep(.1, 1.0, mv.z / count);
+        ivec2 tiles = (size + 31) / 32, tile = ivec2(gl_WorkGroupID.xy);
+        vec2 oldPosition = clamp(vec2(tile) + mv.xy / (count * 32), vec2(0), vec2(tiles - 1));
+        ivec2 oldTile = ivec2(floor(oldPosition)), oldNext = min(oldTile + 1, tiles - 1);
+        vec2 oldFraction = fract(oldPosition);
+        for (int bin = 0; bin < 8; ++bin) {
+            vec3 current = moments[bin];
+            float faceCount = max(current.z, 1);
+            float faceMean = current.x / faceCount;
+            float variance = max(current.y / faceCount - faceMean * faceMean, 0);
+            vec4 h = vec4(0);
+            float historyWeight = 0;
+            if (mode.hasPrevious != 0) {
+                for (int y = 0; y < 2; ++y)
+                    for (int x = 0; x < 2; ++x) {
+                        ivec2 q = ivec2(x == 0 ? oldTile.x : oldNext.x, y == 0 ? oldTile.y : oldNext.y);
+                        float w = (x == 0 ? 1 - oldFraction.x : oldFraction.x) * (y == 0 ? 1 - oldFraction.y : oldFraction.y);
+                        vec4 old = previous[(q.y * tiles.x + q.x) * 8 + bin];
+                        if (old.x < 0) continue;
+                        h += old * w;
+                        historyWeight += w;
+                    }
+            }
+            bool hasHistory = historyWeight > .01;
+            h = hasHistory ? h / historyWeight : vec4(current.z > 0 ? faceMean : -1, .0004, 0, faceMean);
+            if (current.z == 0) {
+                h.z *= .85;
+            } else {
+                float difference = faceMean - h.x;
+                float standardError = sqrt(h.y + variance / faceCount);
+                float threshold = max(.04, 6.0 * standardError);
+                float changed = smoothstep(threshold, threshold * 1.5, abs(difference));
+                changed *= smoothstep(4.0, 24.0, current.z);
+                float cumulativeThreshold = max(.08, threshold * 1.5);
+                if (emptyDirect > .5 && mv.z / count < .01)
+                    changed = max(changed, smoothstep(cumulativeThreshold, cumulativeThreshold * 1.5,
+                        abs(faceMean - h.w)) * smoothstep(4.0, 24.0, current.z));
+                changed *= mix(1.0, localLightDominance, moving);
+                if (moving > 0 && localLightDominance > 0) {
+                    float matchedCount = max(change.z, 1);
+                    float delta = change.x / matchedCount;
+                    float deltaVariance = max(change.y / matchedCount - delta * delta, 0);
+                    float error = sqrt(deltaVariance / matchedCount);
+                    float limit = max(.06, 3.5 * error);
+                    float measured = smoothstep(limit, limit * 1.5, abs(delta)) * smoothstep(16.0, 64.0, change.z);
+                    changed = mix(changed, min(changed, measured), moving * localLightDominance);
+                }
+                float faceResponse = hasHistory ? max(sqrt(changed), h.z * .85) : 0;
+                float noise = variance / faceCount;
+                float reference = mix(h.w, faceMean, max(moving, mix(.005, .25, faceResponse)));
+                h = vec4(faceMean, max(noise, .000025), faceResponse, reference);
+            }
+            next[(tile.y * tiles.x + tile.x) * 8 + bin] = h;
+            imageStore(responseImage, ivec2(tile.x, tile.y * 9 + bin),
+                vec4(h.z, clamp(current.z / 32.0, 0.0, 1.0), 0, 0));
+        }
+        imageStore(responseImage, ivec2(tile.x, tile.y * 9 + 8), vec4(emptyDirect, 0, 0, 0));
+    }
+}

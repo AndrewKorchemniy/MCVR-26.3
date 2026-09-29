@@ -8,13 +8,15 @@
 #include "core/render/modules/world/world_module.hpp"
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldModuleContext;
 
 struct TemporalAccumulationPushConstant {
     float alpha;
-    float threshold;
+    float normalThreshold;
+    float depthThreshold;
+    float depthScale;
 };
 
 struct TemporalAccumulationModuleContext;
@@ -24,7 +26,7 @@ class TemporalAccumulationModule : public WorldModule, public SharedObject<Tempo
 
   public:
     constexpr static std::string_view NAME = "render_pipeline.module.temporal_accumulation.name";
-    constexpr static uint32_t inputImageNum = 3;
+    constexpr static uint32_t inputImageNum = 4;
     constexpr static uint32_t outputImageNum = 1;
 
     TemporalAccumulationModule();
@@ -56,12 +58,11 @@ class TemporalAccumulationModule : public WorldModule, public SharedObject<Tempo
     void initPipeline();
 
   private:
-    // input
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> hdrNoisyImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> motionVectorImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> normalRoughnessImages_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> linearDepthImages_;
 
-    // accumulation
     std::vector<std::shared_ptr<vk::DescriptorTable>> descriptorTables_;
     std::shared_ptr<vk::Shader> vertShader_;
     std::shared_ptr<vk::Shader> fragShader_;
@@ -71,11 +72,12 @@ class TemporalAccumulationModule : public WorldModule, public SharedObject<Tempo
 
     std::shared_ptr<vk::DeviceLocalImage> accumulatedRadianceImage_;
     std::shared_ptr<vk::DeviceLocalImage> accumulatedNormalImage_;
+    std::shared_ptr<vk::DeviceLocalImage> accumulatedDepthImage_;
     std::shared_ptr<vk::Sampler> sampler_;
 
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> accumulatedNormalOutImages_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> accumulatedDepthOutImages_;
 
-    // output
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> accumulatedRadianceOutImages_;
 
     std::vector<std::shared_ptr<WorldModuleContext>> contexts_;
@@ -84,25 +86,27 @@ class TemporalAccumulationModule : public WorldModule, public SharedObject<Tempo
 
     float alpha_ = 0.12;
     float threshold_ = 0.9;
+    float depthThreshold_ = 0.05f;
+    float depthScale_ = 0.015f;
 };
 
 struct TemporalAccumulationModuleContext : public WorldModuleContext, SharedObject<TemporalAccumulationModuleContext> {
     std::weak_ptr<TemporalAccumulationModule> temporalAccumulationModule;
 
-    // input
     std::shared_ptr<vk::DeviceLocalImage> hdrNoisyImage;
     std::shared_ptr<vk::DeviceLocalImage> motionVectorImage;
     std::shared_ptr<vk::DeviceLocalImage> normalRoughnessImage;
+    std::shared_ptr<vk::DeviceLocalImage> linearDepthImage;
 
-    // accumulation
     std::shared_ptr<vk::DescriptorTable> descriptorTable;
     std::shared_ptr<vk::Framebuffer> framebuffer;
 
     std::shared_ptr<vk::DeviceLocalImage> accumulatedRadianceImage;
     std::shared_ptr<vk::DeviceLocalImage> accumulatedNormalImage;
+    std::shared_ptr<vk::DeviceLocalImage> accumulatedDepthImage;
     std::shared_ptr<vk::DeviceLocalImage> accumulatedNormalOutImage;
+    std::shared_ptr<vk::DeviceLocalImage> accumulatedDepthOutImage;
 
-    // output
     std::shared_ptr<vk::DeviceLocalImage> accumulatedRadianceOutImage;
 
     TemporalAccumulationModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,

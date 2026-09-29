@@ -93,7 +93,9 @@ vec3 integrateSingleScattering(vec3 rayOrigin, vec3 rayDir, bool isSun) {
         vec3 lightTransmittance = sampleTransmittance(r, muS);
 
         vec3 scattering = sigmaSR * rayleighPhase + sigmaSM * miePhase;
-        vec3 scatteredSample = viewTransmittance * (lightTransmittance * (scattering * (isSun ? VPT_SUN_RADIANCE : VPT_MOON_RADIANCE))) * dt;
+        vec3 scatteredSample = viewTransmittance *
+                               (lightTransmittance * (scattering * (isSun ? VPT_SUN_RADIANCE : VPT_MOON_RADIANCE))) *
+                               dt;
 
         scatteredRadiance += scatteredSample;
         viewTransmittance *= exp(-sigmaT * dt);
@@ -122,6 +124,7 @@ void main() {
     float cameraHeight = worldUBO.cameraViewMatInv[3].y;
     vec3 rayOrigin = vec3(0.0, VPT_ATMOSPHERE_RG + cameraHeight + 70.0, 0.0);
 
-    vec3 scatteredRadiance = integrateSingleScattering(rayOrigin, rayDir, false) + integrateSingleScattering(rayOrigin, rayDir, true);
+    vec3 scatteredRadiance =
+        integrateSingleScattering(rayOrigin, rayDir, false) + integrateSingleScattering(rayOrigin, rayDir, true);
     outColor = vec4(scatteredRadiance, 1.0);
 }

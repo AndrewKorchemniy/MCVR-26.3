@@ -4,10 +4,6 @@
 
 #include <iostream>
 
-std::ostream &renderPassCout() {
-    return std::cout << "[RenderPass] ";
-}
-
 std::ostream &renderPassCerr() {
     return std::cerr << "[RenderPass] ";
 }
@@ -21,10 +17,6 @@ VkRenderPass &vk::RenderPass::vkRenderPass() {
 
 vk::RenderPass::~RenderPass() {
     vkDestroyRenderPass(device_->vkDevice(), renderPass_, nullptr);
-
-#ifdef DEBUG
-    renderPassCout() << "render pass deconstructed" << std::endl;
-#endif
 }
 
 vk::RenderPassBuilder::AttachmentDescriptionBuilder::AttachmentDescriptionBuilder(vk::RenderPassBuilder &parent)
@@ -38,7 +30,6 @@ vk::RenderPassBuilder::AttachmentDescriptionBuilder::defineAttachmentDescription
 }
 
 vk::RenderPassBuilder &vk::RenderPassBuilder::AttachmentDescriptionBuilder::endAttachmentDescription() {
-    // parent.attachmentDescriptions = attachmentDescriptions;
     return parent;
 }
 
@@ -53,7 +44,6 @@ vk::RenderPassBuilder::AttachmentReferenceBuilder::defineAttachmentReference(
 }
 
 vk::RenderPassBuilder &vk::RenderPassBuilder::AttachmentReferenceBuilder::endAttachmentReference() {
-    // parent.attachmentReferences = attachmentReferences;
     return parent;
 }
 
@@ -73,15 +63,6 @@ vk::RenderPassBuilder::SubpassDescriptionBuilder::defineSubpassDescription(Subpa
     }
     vkDescription.inputAttachmentCount = inputAttachmentReference.size();
     vkDescription.pInputAttachments = inputAttachmentReference.data();
-#ifdef DEBUG
-    renderPassCout() << "inputAttachmentCount: " << inputAttachmentReference.size() << std::endl;
-    if (inputAttachmentReference.size() > 0) {
-        for (int i = 0; i < inputAttachmentReference.size(); i++) {
-            renderPassCout() << "inputAttachmentIndex: " << subpassDescription.inputAttachmentIndices[i]
-                             << ", attachment: " << inputAttachmentReference[i].attachment << std::endl;
-        }
-    }
-#endif
 
     std::vector<VkAttachmentReference> &colorAttachmentReference = colorAttachmentReferences.emplace_back();
     for (uint32_t i : subpassDescription.colorAttachmentIndices) {
@@ -89,37 +70,18 @@ vk::RenderPassBuilder::SubpassDescriptionBuilder::defineSubpassDescription(Subpa
     }
     vkDescription.colorAttachmentCount = colorAttachmentReference.size();
     vkDescription.pColorAttachments = colorAttachmentReference.data();
-#ifdef DEBUG
-    renderPassCout() << "colorAttachmentCount: " << colorAttachmentReference.size() << std::endl;
-    if (colorAttachmentReference.size() > 0) {
-        for (int i = 0; i < colorAttachmentReference.size(); i++) {
-            renderPassCout() << "colorAttachmentIndex: " << subpassDescription.colorAttachmentIndices[i]
-                             << ", attachment: " << colorAttachmentReference[i].attachment << std::endl;
-        }
-    }
-#endif
 
     if (subpassDescription.resolveAttachmentIndex != -1) {
         vkDescription.pResolveAttachments =
             &parent.attachmentReferenceBuilder_.attachmentReferences[subpassDescription.resolveAttachmentIndex];
     } else {
-#ifdef DEBUG
-        renderPassCout() << "no resolveAttachment" << std::endl;
-#endif
         vkDescription.pResolveAttachments = nullptr;
     }
 
     if (subpassDescription.depthStencilAttachmentIndex != -1) {
         vkDescription.pDepthStencilAttachment =
             &parent.attachmentReferenceBuilder_.attachmentReferences[subpassDescription.depthStencilAttachmentIndex];
-#ifdef DEBUG
-        renderPassCout() << "depthStencilAttachment: " << subpassDescription.depthStencilAttachmentIndex
-                         << ", attachment: " << vkDescription.pDepthStencilAttachment->attachment << std::endl;
-#endif
     } else {
-#ifdef DEBUG
-        renderPassCout() << "no depthStencilAttachment" << std::endl;
-#endif
         vkDescription.pDepthStencilAttachment = nullptr;
     }
 
@@ -132,7 +94,6 @@ vk::RenderPassBuilder::SubpassDescriptionBuilder::defineSubpassDescription(Subpa
 }
 
 vk::RenderPassBuilder &vk::RenderPassBuilder::SubpassDescriptionBuilder::endSubpassDescription() {
-    // parent.subpassDescriptions = subpassDescriptions;
     return parent;
 }
 
@@ -146,7 +107,6 @@ vk::RenderPassBuilder::SubpassDependencyBuilder::defineSubpassDependency(VkSubpa
 }
 
 vk::RenderPassBuilder &vk::RenderPassBuilder::SubpassDependencyBuilder::endSubpassDependency() {
-    // parent.subpassDependencies = subpassDependencies;
     return parent;
 }
 
@@ -175,7 +135,6 @@ vk::RenderPassBuilder::SubpassDependencyBuilder &vk::RenderPassBuilder::RenderPa
 }
 
 std::shared_ptr<vk::RenderPass> vk::RenderPassBuilder::RenderPassBuilder::build(std::shared_ptr<Device> device) {
-    // Create the render pass
     VkRenderPassCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     createInfo.attachmentCount = attachmentDescriptionBuilder_.attachmentDescriptions.size();
@@ -189,10 +148,6 @@ std::shared_ptr<vk::RenderPass> vk::RenderPassBuilder::RenderPassBuilder::build(
     if (vkCreateRenderPass(device->vkDevice(), &createInfo, nullptr, &renderPass) != VK_SUCCESS) {
         renderPassCerr() << "failed to create render pass" << std::endl;
         exit(EXIT_FAILURE);
-    } else {
-#ifdef DEBUG
-        renderPassCout() << "created render pass" << std::endl;
-#endif
     }
 
     return std::make_shared<vk::RenderPass>(device, renderPass);

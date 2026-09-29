@@ -1,0 +1,213 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#ifndef DIRECTIONAL_SHADOW_INDIRECT_WORKGROUP_SIZE
+#    define DIRECTIONAL_SHADOW_INDIRECT_WORKGROUP_SIZE 64
+#endif
+
+layout(local_size_x = DIRECTIONAL_SHADOW_INDIRECT_WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+#include "common/shared.hpp"
+
+struct AccelerationStructureInstance {
+    vec4 transform0;
+    vec4 transform1;
+    vec4 transform2;
+    uint customIndexAndMask;
+    uint sbtOffsetAndFlags;
+    uint referenceLow;
+    uint referenceHigh;
+};
+
+struct DrawIndirectCommand {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+};
+
+struct RenderIndirectMetadataHeader {
+    uint drawCount;
+    uint metadataOffsetBytes;
+    uint metadataStrideBytes;
+    uint commandStrideBytes;
+    uint chunkInstanceIndexBase;
+    uint chunkGeometryAddressIndexBase;
+    uint entityInstanceCount;
+    uint entityGeometryCount;
+    uint chunkInstanceCount;
+    uint chunkGeometrySlotCount;
+};
+
+struct RenderIndirectDrawMetadata {
+    uint objectType;
+    uint objectIndex;
+    uint geometryIndex;
+    uint instanceIndex;
+    uint geometryAddressIndex;
+    uint vertexCount;
+    uint indexCount;
+    uint layerOrder;
+    uint renderLayerHashLow;
+    uint renderLayerHashHigh;
+    uint flags;
+    uint reserved;
+};
+
+layout(set = 1, binding = 26, std430) readonly buffer DirectionalShadowIndirectMetadata {
+    RenderIndirectMetadataHeader header;
+    RenderIndirectDrawMetadata metadata[];
+}
+directionalShadowMetadata;
+
+layout(set = 1, binding = 10, std430) readonly buffer TlasInstances {
+    AccelerationStructureInstance instances[];
+}
+tlasInstances;
+
+layout(set = 1, binding = 24, std140) uniform DirectionalShadowUniform {
+    mat4 lightViewProj;
+    vec4 lightDirectionAndStrength;
+    vec4 shadowParams;
+    vec4 shadowDistanceParams;
+}
+directionalShadow;
+
+layout(set = 1, binding = 25, std430) buffer DirectionalShadowIndirectCommands {
+    DrawIndirectCommand commands[];
+}
+directionalShadowCommands;
+
+const uint RASTER_VISIBILITY_BOUNDS_CHUNK = 0u;
+const uint RASTER_VISIBILITY_BOUNDS_ENTITY = 1u;
+const uint RASTER_VISIBILITY_BOUNDS_CLOUDS = 2u;
+const vec3 RASTER_ENTITY_LOCAL_BOUNDS_MIN = vec3(-8.0);
+const vec3 RASTER_ENTITY_LOCAL_BOUNDS_MAX = vec3(8.0);
+const uint RENDER_LAYER_HASH_CLOUDS_LOW = 2254175127u;
+const uint RENDER_LAYER_HASH_CLOUDS_HIGH = 1931664976u;
+const uvec2 RENDER_LAYER_HASH_CLOUDS = uvec2(RENDER_LAYER_HASH_CLOUDS_LOW, RENDER_LAYER_HASH_CLOUDS_HIGH);
+
+const uvec2 RENDER_LAYER_HASH_TRANSLUCENT = uvec2(1847089516u, 3557394643u);
+const uvec2 RENDER_LAYER_HASH_TRANSLUCENT_MOVING_BLOCK = uvec2(2892334413u, 3447226570u);
+const uvec2 RENDER_LAYER_HASH_TRIPWIRE = uvec2(3613336919u, 2969457857u);
+const uvec2 RENDER_LAYER_HASH_ITEM_ENTITY_TRANSLUCENT_CULL = uvec2(2097292005u, 128709809u);
+const uvec2 RENDER_LAYER_HASH_ENTITY_TRANSLUCENT = uvec2(1506745222u, 2510760922u);
+const uvec2 RENDER_LAYER_HASH_ENTITY_TRANSLUCENT_EMISSIVE = uvec2(3402099520u, 972664649u);
+const uvec2 RENDER_LAYER_HASH_ARMOR_TRANSLUCENT = uvec2(496475400u, 4123064749u);
+const uvec2 RENDER_LAYER_HASH_ENTITY_ALPHA = uvec2(2461434209u, 101306947u);
+const uvec2 RENDER_LAYER_HASH_EYES = uvec2(2462904747u, 4019224416u);
+const uvec2 RENDER_LAYER_HASH_ENTITY_NO_OUTLINE = uvec2(2883181905u, 1170527568u);
+const uvec2 RENDER_LAYER_HASH_SOLID = uvec2(314395796u, 1047652961u);
+const uvec2 RENDER_LAYER_HASH_ENTITY_SOLID = uvec2(3620538922u, 865578660u);
+const uvec2 RENDER_LAYER_HASH_ENTITY_SOLID_Z_OFFSET_FORWARD = uvec2(2084871017u, 83813293u);
+const uint RENDER_INDIRECT_DRAW_FLAG_HAND = 1u << 1u;
+
+bool hashEquals(uvec2 value, uvec2 expected) {
+    return value.x == expected.x && value.y == expected.y;
+}
+
+bool isSolidFastShadowLayer(RenderIndirectDrawMetadata drawMetadata) {
+    uvec2 renderLayerHash = uvec2(drawMetadata.renderLayerHashLow, drawMetadata.renderLayerHashHigh);
+    return hashEquals(renderLayerHash, RENDER_LAYER_HASH_SOLID) ||
+           hashEquals(renderLayerHash, RENDER_LAYER_HASH_ENTITY_SOLID) ||
+           hashEquals(renderLayerHash, RENDER_LAYER_HASH_ENTITY_SOLID_Z_OFFSET_FORWARD);
+}
+
+bool isNonShadowCasterRenderLayer(RenderIndirectDrawMetadata drawMetadata) {
+    uvec2 renderLayerHash = uvec2(drawMetadata.renderLayerHashLow, drawMetadata.renderLayerHashHigh);
+    return hashEquals(renderLayerHash, RENDER_LAYER_HASH_CLOUDS) ||
+           hashEquals(renderLayerHash, RENDER_LAYER_HASH_EYES) ||
+           hashEquals(renderLayerHash, RENDER_LAYER_HASH_ENTITY_TRANSLUCENT_EMISSIVE) ||
+           hashEquals(renderLayerHash, RENDER_LAYER_HASH_ENTITY_NO_OUTLINE);
+}
+
+bool isHandDraw(RenderIndirectDrawMetadata drawMetadata) {
+    return (drawMetadata.flags & RENDER_INDIRECT_DRAW_FLAG_HAND) != 0u;
+}
+
+bool isCloudDraw(RenderIndirectDrawMetadata drawMetadata) {
+    return drawMetadata.renderLayerHashLow == RENDER_LAYER_HASH_CLOUDS_LOW &&
+           drawMetadata.renderLayerHashHigh == RENDER_LAYER_HASH_CLOUDS_HIGH;
+}
+
+uint visibilityBoundsClass(RenderIndirectDrawMetadata drawMetadata) {
+    if (drawMetadata.objectType == 0u) { return RASTER_VISIBILITY_BOUNDS_CHUNK; }
+    if (isCloudDraw(drawMetadata)) { return RASTER_VISIBILITY_BOUNDS_CLOUDS; }
+    return RASTER_VISIBILITY_BOUNDS_ENTITY;
+}
+
+bool resolveDirectionalShadowDrawInstanceIndex(RenderIndirectDrawMetadata drawMetadata, out uint instanceIndex) {
+    instanceIndex = drawMetadata.instanceIndex;
+    if (drawMetadata.objectType == 0u) {
+        if (instanceIndex >= directionalShadowMetadata.header.chunkInstanceCount ||
+            drawMetadata.geometryAddressIndex >= directionalShadowMetadata.header.chunkGeometrySlotCount) {
+            return false;
+        }
+        instanceIndex += directionalShadowMetadata.header.chunkInstanceIndexBase;
+        return true;
+    }
+    return instanceIndex < directionalShadowMetadata.header.entityInstanceCount &&
+           drawMetadata.geometryAddressIndex < directionalShadowMetadata.header.entityGeometryCount;
+}
+
+vec3 transformPoint(AccelerationStructureInstance instance, vec3 position) {
+    return vec3(dot(instance.transform0.xyz, position) + instance.transform0.w,
+                dot(instance.transform1.xyz, position) + instance.transform1.w,
+                dot(instance.transform2.xyz, position) + instance.transform2.w);
+}
+
+bool outsideShadowClipBox(AccelerationStructureInstance instance, vec3 localMin, vec3 localMax) {
+    bool outsideLeft = true;
+    bool outsideRight = true;
+    bool outsideBottom = true;
+    bool outsideTop = true;
+    bool outsideNear = true;
+    bool outsideFar = true;
+
+    mat4 worldToShadowClip = directionalShadow.lightViewProj;
+    for (uint corner = 0u; corner < 8u; corner++) {
+        vec3 localPosition =
+            vec3((corner & 1u) == 0u ? localMin.x : localMax.x, (corner & 2u) == 0u ? localMin.y : localMax.y,
+                 (corner & 4u) == 0u ? localMin.z : localMax.z);
+        vec4 clipPosition = worldToShadowClip * vec4(transformPoint(instance, localPosition), 1.0);
+        outsideLeft = outsideLeft && clipPosition.x < -clipPosition.w;
+        outsideRight = outsideRight && clipPosition.x > clipPosition.w;
+        outsideBottom = outsideBottom && clipPosition.y < -clipPosition.w;
+        outsideTop = outsideTop && clipPosition.y > clipPosition.w;
+        outsideNear = outsideNear && clipPosition.z < 0.0;
+        outsideFar = outsideFar && clipPosition.z > clipPosition.w;
+    }
+
+    return outsideLeft || outsideRight || outsideBottom || outsideTop || outsideNear || outsideFar;
+}
+
+bool isDrawVisibleInShadowMap(RenderIndirectDrawMetadata drawMetadata) {
+    if (isHandDraw(drawMetadata)) { return false; }
+    if (isNonShadowCasterRenderLayer(drawMetadata)) { return false; }
+
+    uint instanceIndex;
+    if (!resolveDirectionalShadowDrawInstanceIndex(drawMetadata, instanceIndex)) { return false; }
+    AccelerationStructureInstance instance = tlasInstances.instances[instanceIndex];
+    uint boundsClass = visibilityBoundsClass(drawMetadata);
+    if (boundsClass == RASTER_VISIBILITY_BOUNDS_CHUNK) {
+        return !outsideShadowClipBox(instance, vec3(0.0), vec3(16.0));
+    }
+    if (boundsClass == RASTER_VISIBILITY_BOUNDS_CLOUDS) {
+        return !outsideShadowClipBox(instance, vec3(-384.0, 0.0, -384.0), vec3(396.0, 4.0, 396.0));
+    }
+    return !outsideShadowClipBox(instance, RASTER_ENTITY_LOCAL_BOUNDS_MIN, RASTER_ENTITY_LOCAL_BOUNDS_MAX);
+}
+
+void main() {
+    uint drawIndex = gl_GlobalInvocationID.x;
+    uint drawCount = directionalShadowMetadata.header.drawCount;
+
+    if (drawIndex >= drawCount) { return; }
+
+    RenderIndirectDrawMetadata drawMetadata = directionalShadowMetadata.metadata[drawIndex];
+    uint drawVertexCount = drawMetadata.indexCount - drawMetadata.indexCount % 3u;
+    bool visible = directionalShadow.shadowParams.w >= 0.5 && drawVertexCount > 0u && drawMetadata.vertexCount > 0u &&
+                   isDrawVisibleInShadowMap(drawMetadata);
+    directionalShadowCommands.commands[drawIndex] =
+        DrawIndirectCommand(drawVertexCount, visible ? 1u : 0u, 0u, drawIndex);
+}

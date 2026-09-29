@@ -1,31 +1,24 @@
 #pragma once
 
 #include "core/render/modules/world/world_module.hpp"
+#include "frame_clock.hpp"
 #include <array>
-#include <deque>
-#include <chrono>
 
 class FSRUpscalerModuleContext;
 
 namespace mcvr {
-    class FSR3Upscaler;
+class FSR3Upscaler;
 }
 
 class FSRUpscalerModule : public WorldModule, public SharedObject<FSRUpscalerModule> {
     friend FSRUpscalerModuleContext;
 
   public:
-    enum class QualityMode {
-        NativeAA = 0,           // 1.0x (no upscaling)
-        Quality = 1,            // 1.5x
-        Balanced = 2,           // 1.7x
-        Performance = 3,        // 2.0x
-        UltraPerformance = 4    // 3.0x
-    };
+    enum class QualityMode { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4 };
 
     static constexpr const char *NAME = "render_pipeline.module.fsr_upscaler.name";
-    static constexpr uint32_t inputImageNum = 5;  // color, depth, motion vectors, firstHitDepth, normalRoughness
-    static constexpr uint32_t outputImageNum = 4; // upscaled HDR output, upscaled firstHitDepth, motion, normalRoughness
+    static constexpr uint32_t inputImageNum = 5;
+    static constexpr uint32_t outputImageNum = 4;
 
     static bool isQualityModeAttributeKey(const std::string &key);
     static bool parseQualityModeValue(const std::string &value, QualityMode &outMode);
@@ -54,9 +47,11 @@ class FSRUpscalerModule : public WorldModule, public SharedObject<FSRUpscalerMod
 
     void preClose() override;
 
-    static void getRenderResolution(uint32_t displayWidth, uint32_t displayHeight,
-                                   QualityMode mode,
-                                   uint32_t* outRenderWidth, uint32_t* outRenderHeight);
+    static void getRenderResolution(uint32_t displayWidth,
+                                    uint32_t displayHeight,
+                                    QualityMode mode,
+                                    uint32_t *outRenderWidth,
+                                    uint32_t *outRenderHeight);
 
   private:
     static bool isHdrUpscaleFormat(VkFormat format);
@@ -66,36 +61,39 @@ class FSRUpscalerModule : public WorldModule, public SharedObject<FSRUpscalerMod
     void initPipeline();
 
     std::vector<std::shared_ptr<FSRUpscalerModuleContext>> contexts_;
-    
-    // Resolution state
+
     uint32_t renderWidth_ = 0;
     uint32_t renderHeight_ = 0;
     uint32_t displayWidth_ = 0;
     uint32_t displayHeight_ = 0;
-    QualityMode qualityMode_ = QualityMode::NativeAA;
+    QualityMode qualityMode_ = QualityMode::Balanced;
     float sharpness_ = 0.7f;
     float preExposure_ = 1.0f;
     bool fsr3Enabled_ = true;
 
-    // FSR3 implementation
     std::shared_ptr<mcvr::FSR3Upscaler> fsr3_;
     bool initialized_ = false;
 
-    // Depth conversion resources
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> deviceDepthImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> fsrMotionVectorImages_;
     std::vector<std::shared_ptr<vk::DescriptorTable>> depthDescriptorTables_;
+    std::vector<std::shared_ptr<vk::DescriptorTable>> guideDescriptorTables_;
     std::shared_ptr<vk::ComputePipeline> depthConversionPipeline_;
     std::shared_ptr<vk::ComputePipeline> firstHitDepthUpscalePipeline_;
     std::shared_ptr<vk::ComputePipeline> motionUpscalePipeline_;
     std::shared_ptr<vk::ComputePipeline> normalRoughnessUpscalePipeline_;
+    std::vector<std::shared_ptr<vk::DescriptorTable>> reactiveDescriptorTables_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> reactiveImages_;
+    std::array<std::shared_ptr<vk::DeviceLocalImage>, 2> historyDepthImages_;
+    std::shared_ptr<vk::ComputePipeline> reactivePipeline_;
+    uint32_t historyDepthIndex_ = 0;
+    bool hasDepthHistory_ = false;
 
-    // Camera state for reset detection
     glm::vec3 lastCameraPos_ = glm::vec3(0.0f);
     glm::vec3 lastCameraDir_ = glm::vec3(0.0f, 0.0f, -1.0f);
     bool firstFrame_ = true;
+    mcvr::fsr::FrameClock frameClock_;
 
-    // Temporal storage for images during setOrCreate
     std::vector<std::array<std::shared_ptr<vk::DeviceLocalImage>, 5>> inputImages_;
     std::vector<std::array<std::shared_ptr<vk::DeviceLocalImage>, 4>> outputImages_;
 };
@@ -103,36 +101,32 @@ class FSRUpscalerModule : public WorldModule, public SharedObject<FSRUpscalerMod
 class FSRUpscalerModuleContext : public WorldModuleContext {
   public:
     FSRUpscalerModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
-                          std::shared_ptr<WorldPipelineContext> worldPipelineContext,
-                          std::shared_ptr<FSRUpscalerModule> upscalerModule);
+                             std::shared_ptr<WorldPipelineContext> worldPipelineContext,
+                             std::shared_ptr<FSRUpscalerModule> upscalerModule);
 
     void render() override;
+    bool populateFrameGenerationInputs(mcvr::FrameGenerationInputs &inputs) override;
 
-    // Inputs (render resolution)
     std::shared_ptr<vk::DeviceLocalImage> inputColorImage;
     std::shared_ptr<vk::DeviceLocalImage> inputDepthImage;
     std::shared_ptr<vk::DeviceLocalImage> inputMotionVectorImage;
     std::shared_ptr<vk::DeviceLocalImage> inputFirstHitDepthImage;
     std::shared_ptr<vk::DeviceLocalImage> inputNormalRoughnessImage;
 
-    // Outputs (display resolution)
     std::shared_ptr<vk::DeviceLocalImage> outputImage;
     std::shared_ptr<vk::DeviceLocalImage> upscaledFirstHitDepthImage;
     std::shared_ptr<vk::DeviceLocalImage> upscaledMotionVectorImage;
     std::shared_ptr<vk::DeviceLocalImage> upscaledNormalRoughnessImage;
 
     std::shared_ptr<vk::DescriptorTable> depthDescriptorTable;
+    std::shared_ptr<vk::DescriptorTable> guideDescriptorTable;
     std::shared_ptr<vk::DeviceLocalImage> deviceDepthImage;
     std::shared_ptr<vk::DeviceLocalImage> fsrMotionVectorImage;
 
   private:
     bool checkCameraReset(const glm::vec3 &cameraPos, const glm::vec3 &cameraDir);
-    float getSmoothDeltaTime();
+    void prepareReactiveMask(bool reset);
 
     std::weak_ptr<FSRUpscalerModule> upscalerModule_;
-    
-    // Timing
-    std::deque<float> frameTimes_;
-    std::chrono::high_resolution_clock::time_point lastFrameTime_;
-    bool timingFirstFrame_ = true;
+
 };

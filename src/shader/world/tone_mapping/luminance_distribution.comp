@@ -1,0 +1,78 @@
+#version 460
+
+#define NUM_BINS 256
+#define BIN_WEIGHT_SCALE 64.0
+
+const vec3 REC709_LUMINANCE = vec3(0.2126, 0.7152, 0.0722);
+
+layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
+layout(set = 0, binding = 1, r32ui) uniform uimage2D luminanceDistributionImage;
+
+layout(std430, set = 0, binding = 2) readonly buffer ToneMappingStateBuffer {
+    float exposureEv;
+    float measuredLogLuminance;
+    uint frameSerial;
+    uint valid;
+}
+toneMappingState;
+
+layout(push_constant) uniform PushConstant {
+    float logLuminanceMin;
+    float logLuminanceMax;
+    float deltaTimeSec;
+    float exposureCeiling;
+    float targetLuminance;
+    float meteringResponse;
+    float skyMeterWeight;
+    float emissiveMeterWeight;
+    float manualExposureEv;
+    float chromaPreservation;
+    float outputContrastRange;
+    float shadowDetailFloor;
+    float shadowContrast;
+    float shadowPivot;
+    float outputOffsetEv;
+    float curveLiftLimit;
+    uint flags;
+    float nightFactor;
+}
+pc;
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+shared uint localHistogram[NUM_BINS];
+
+void main() {
+    uint localIndex = gl_LocalInvocationIndex;
+    localHistogram[localIndex] = 0u;
+    barrier();
+
+    ivec2 resolution = textureSize(hdrTexture, 0);
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (all(greaterThanEqual(pixel, ivec2(0))) && all(lessThan(pixel, resolution))) {
+        vec3 hdr = texelFetch(hdrTexture, pixel, 0).rgb;
+        if (!any(isnan(hdr)) && !any(isinf(hdr))) {
+            float exposureScale =
+                toneMappingState.valid != 0u ? exp2(clamp(toneMappingState.exposureEv, -24.0, 24.0)) : 1.0;
+            if (isnan(exposureScale) || isinf(exposureScale)) exposureScale = 1.0;
+
+            float luminance = dot(max(hdr, vec3(0.0)), REC709_LUMINANCE) * exposureScale;
+            if (luminance > 0.0 && luminance < exp2(pc.logLuminanceMax)) {
+                float logLuminance = clamp(log2(luminance), pc.logLuminanceMin, pc.logLuminanceMax);
+                float scaled = (logLuminance - pc.logLuminanceMin) *
+                               (float(NUM_BINS - 1u) / max(pc.logLuminanceMax - pc.logLuminanceMin, 1e-6));
+                uint leftBin = min(uint(floor(scaled)), NUM_BINS - 1u);
+                uint rightBin = leftBin + 1u;
+                float fixedWeight = BIN_WEIGHT_SCALE;
+                uint leftWeight = uint(max((1.0 - fract(scaled)) * fixedWeight, 0.0));
+                uint rightWeight = uint(max(fract(scaled) * fixedWeight, 0.0));
+                if (leftWeight > 0u) atomicAdd(localHistogram[leftBin], leftWeight);
+                if (rightBin < NUM_BINS && rightWeight > 0u) atomicAdd(localHistogram[rightBin], rightWeight);
+            }
+        }
+    }
+
+    barrier();
+    uint localCount = localHistogram[localIndex];
+    if (localCount > 0u) imageAtomicAdd(luminanceDistributionImage, ivec2(int(localIndex), 0), localCount);
+}

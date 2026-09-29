@@ -1,0 +1,163 @@
+#version 460
+
+const uint MANUAL_EXPOSURE = 1u << 0u;
+const uint ALLOW_NEGATIVE_EXPOSURE = 1u << 1u;
+const uint SEGMENTATION_MASK_AVAILABLE = 1u << 2u;
+const uint RESET_EXPOSURE = 1u << 3u;
+const float DEFAULT_METERING_RESPONSE = 3.0;
+const float MIN_EXPOSURE_CEILING_EV = 0.0;
+const float MAX_EXPOSURE_CEILING_EV = 4.0;
+const float DEFAULT_EXPOSURE_CEILING_EV = 2.25;
+const float MIN_VALID_METER_WEIGHT = 16.0;
+const float EXPOSURE_BRIGHTEN_SPEED = 1.5;
+const float EXPOSURE_DARKEN_SPEED = 3.0;
+const float FULL_ADAPTATION_EV = 2.0;
+const float DARK_SCENE_ADAPTATION_RESPONSE = 0.35;
+
+layout(set = 0, binding = 0) uniform sampler2D hdrTexture;
+layout(set = 0, binding = 3, r8ui) readonly uniform uimage2D segmentationMaskImage;
+
+layout(std430, set = 0, binding = 2) buffer ToneMappingStateBuffer {
+    float exposureEv;
+    float measuredLogLuminance;
+    uint frameSerial;
+    uint valid;
+}
+toneMappingState;
+
+layout(push_constant) uniform PushConstant {
+    float logLuminanceMin;
+    float logLuminanceMax;
+    float deltaTimeSec;
+    float exposureCeiling;
+    float targetLuminance;
+    float meteringResponse;
+    float skyMeterWeight;
+    float emissiveMeterWeight;
+    float manualExposureEv;
+    float chromaPreservation;
+    float outputContrastRange;
+    float shadowDetailFloor;
+    float shadowContrast;
+    float shadowPivot;
+    float outputOffsetEv;
+    float curveLiftLimit;
+    uint flags;
+    float nightFactor;
+}
+pc;
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+shared vec4 measuredSamples[512];
+
+bool flagSet(uint bit) {
+    return (pc.flags & bit) != 0u;
+}
+
+float sanitizedExposureCeilingEv() {
+    float exposureCeilingEv = pc.exposureCeiling;
+    if (isnan(exposureCeilingEv) || isinf(exposureCeilingEv)) { exposureCeilingEv = DEFAULT_EXPOSURE_CEILING_EV; }
+    return clamp(exposureCeilingEv, MIN_EXPOSURE_CEILING_EV, MAX_EXPOSURE_CEILING_EV);
+}
+
+float meterWeight(ivec2 pixel, ivec2 resolution) {
+    if (!flagSet(SEGMENTATION_MASK_AVAILABLE)) return 1.0;
+
+    ivec2 maskSize = imageSize(segmentationMaskImage);
+    ivec2 maskPixel = ivec2((vec2(pixel) + vec2(0.5)) * vec2(maskSize) / vec2(max(resolution, ivec2(1))));
+    maskPixel = clamp(maskPixel, ivec2(0), maskSize - ivec2(1));
+    uint category = imageLoad(segmentationMaskImage, maskPixel).r;
+    if (category == 0u) return 0.0;
+    if ((category & 2u) != 0u) return max(pc.skyMeterWeight, 0.0);
+    if ((category & 4u) != 0u) return max(pc.emissiveMeterWeight, 0.0);
+    return 1.0;
+}
+
+float preserveDarkSceneBrightness(float exposureEv) {
+    float deepDarkExposureEv = max(exposureEv - FULL_ADAPTATION_EV, 0.0);
+    return exposureEv - deepDarkExposureEv * (1.0 - DARK_SCENE_ADAPTATION_RESPONSE);
+}
+
+void main() {
+    float measuringGamma = max(pc.meteringResponse, 0.1);
+    if (isnan(measuringGamma) || isinf(measuringGamma)) measuringGamma = DEFAULT_METERING_RESPONSE;
+
+    ivec2 resolution = textureSize(hdrTexture, 0);
+    uint sampleIndex = gl_LocalInvocationIndex;
+    uint sampleX = sampleIndex & 31u;
+    uint sampleY = sampleIndex >> 5u;
+    ivec2 pixel = ivec2((vec2(sampleX, sampleY) + vec2(0.5)) * vec2(resolution) / vec2(32.0, 16.0));
+    pixel = clamp(pixel, ivec2(0), resolution - ivec2(1));
+
+    vec4 measuredSample = vec4(0.0);
+    vec3 hdr = texelFetch(hdrTexture, pixel, 0).rgb;
+    if (!any(isnan(hdr)) && !any(isinf(hdr))) {
+        float sampleWeight = meterWeight(pixel, resolution);
+        if (sampleWeight > 0.0) {
+            vec3 measuringSample = pow(max(hdr, vec3(0.0)), vec3(1.0 / measuringGamma));
+            measuredSample = vec4(measuringSample * sampleWeight, sampleWeight);
+        }
+    }
+    measuredSamples[sampleIndex] = measuredSample;
+    barrier();
+
+    if (sampleIndex != 0u) return;
+
+    float totalWeight = 0.0;
+    vec3 measuredLightSum = vec3(0.0);
+    for (uint i = 0u; i < 512u; ++i) {
+        measuredLightSum += measuredSamples[i].rgb;
+        totalWeight += measuredSamples[i].a;
+    }
+
+    float previousExposureEv = toneMappingState.exposureEv;
+    bool invalidHistory = flagSet(RESET_EXPOSURE) || toneMappingState.valid == 0u || isnan(previousExposureEv) ||
+                          isinf(previousExposureEv);
+
+    if (totalWeight < MIN_VALID_METER_WEIGHT) {
+        float fallbackExposureEv = invalidHistory ? 0.0 : previousExposureEv;
+        if (flagSet(MANUAL_EXPOSURE)) fallbackExposureEv = clamp(pc.manualExposureEv, 0.0, 14.0);
+        float fallbackMaxEv = sanitizedExposureCeilingEv();
+        float fallbackMinEv = flagSet(ALLOW_NEGATIVE_EXPOSURE) ? pc.logLuminanceMin : 0.0;
+        toneMappingState.exposureEv = flagSet(MANUAL_EXPOSURE) ?
+                                          fallbackExposureEv :
+                                          clamp(fallbackExposureEv, fallbackMinEv, max(fallbackMaxEv, fallbackMinEv));
+        toneMappingState.measuredLogLuminance = pc.logLuminanceMin;
+        toneMappingState.frameSerial = invalidHistory ? 0u : toneMappingState.frameSerial + 1u;
+        toneMappingState.valid = 1u;
+        return;
+    }
+
+    vec3 measuredLight = pow(max(measuredLightSum / totalWeight, vec3(0.0)), vec3(measuringGamma));
+    float meteredLight = max(measuredLight.r, max(measuredLight.g, measuredLight.b));
+    meteredLight = max(meteredLight, exp2(pc.logLuminanceMin));
+    float meteredLogLuminance = log2(meteredLight);
+
+    float configuredMaxEv = sanitizedExposureCeilingEv();
+    float minimumExposureEv = flagSet(ALLOW_NEGATIVE_EXPOSURE) ? pc.logLuminanceMin : 0.0;
+    float targetExposureEv = log2(max(pc.targetLuminance, 0.0001) / (meteredLight + 1e-6));
+    targetExposureEv = preserveDarkSceneBrightness(targetExposureEv);
+    targetExposureEv = clamp(targetExposureEv, minimumExposureEv, max(configuredMaxEv, minimumExposureEv));
+    if (flagSet(MANUAL_EXPOSURE)) {
+        targetExposureEv = clamp(pc.manualExposureEv, 0.0, 14.0);
+        toneMappingState.exposureEv = targetExposureEv;
+        toneMappingState.measuredLogLuminance = meteredLogLuminance;
+        toneMappingState.frameSerial = invalidHistory ? 0u : toneMappingState.frameSerial + 1u;
+        toneMappingState.valid = 1u;
+        return;
+    }
+
+    if (invalidHistory) {
+        toneMappingState.exposureEv = targetExposureEv;
+        toneMappingState.frameSerial = 0u;
+    } else {
+        float exposureSpeed = targetExposureEv > previousExposureEv ? EXPOSURE_BRIGHTEN_SPEED : EXPOSURE_DARKEN_SPEED;
+        float exposureBlend = 1.0 - exp(-clamp(pc.deltaTimeSec, 0.0, 1.0) * exposureSpeed);
+        toneMappingState.exposureEv = mix(previousExposureEv, targetExposureEv, clamp(exposureBlend, 0.0, 1.0));
+        toneMappingState.frameSerial += 1u;
+    }
+
+    toneMappingState.measuredLogLuminance = meteredLogLuminance;
+    toneMappingState.valid = 1u;
+}

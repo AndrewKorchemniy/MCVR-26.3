@@ -32,17 +32,22 @@ layout(set = 2, binding = 0) uniform Uniform {
     WorldUBO ubo;
 };
 
-layout(std430, buffer_reference, buffer_reference_align = 8) readonly buffer IndexBuffer {
+layout(std430, buffer_reference, buffer_reference_align = 4) readonly buffer IndexBuffer {
     uint indices[];
 }
 indexBuffer;
 
 #include "util/vertex.glsl"
+#include "util/vista.glsl"
 
 layout(location = 0) rayPayloadInEXT MainRay mainRay;
 hitAttributeEXT vec2 attribs;
 
 void main() {
+    if (isVistaCovered(ubo, gl_InstanceCustomIndexEXT, attribs)) {
+        ignoreIntersectionEXT;
+        return;
+    }
     uint instanceID = gl_InstanceCustomIndexEXT;
     uint geometryID = gl_GeometryIndexEXT;
     uint geometryBufferIndex = getGeometryBufferIndex(instanceID, geometryID);
@@ -72,7 +77,7 @@ void main() {
         computedposduDv(p0.pos, p1.pos, p2.pos, m0.textureUV, m1.textureUV, m2.textureUV, dposdu, dposdv);
         lod = lodWithCone(textures[nonuniformEXT(textureID)], uv, coneRadiusWorld, dposdu, dposdv);
 
-        alpha *= sampleTexture(textures[nonuniformEXT(textureID)], uv, lod, false).a;
+        alpha *= resolveSurfaceTextureColor(sampleTexture(textures[nonuniformEXT(textureID)], uv, lod, false), alphaMode).a;
     }
 
     alpha = resolveSurfaceAlpha(alpha, alphaMode);
@@ -81,6 +86,10 @@ void main() {
         return;
     }
 
+    if (hasWaterMaterial(m0) && (rayIgnoreWaterSelf(mainRay) || rayInsideBoat(mainRay))) {
+        ignoreIntersectionEXT;
+        return;
+    }
     if (!hasTexture(packedData)) { return; }
 
     int flagTextureID = mapping.entries[textureID].flag;

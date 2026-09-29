@@ -1,6 +1,7 @@
 #include "core/vulkan/framework.hpp"
+#include "core/vulkan/result.hpp"
 
-#include <iostream>
+#include <mutex>
 
 vk::Framework::Context::Context(Framework &framework,
                                 uint32_t frame_index,
@@ -26,9 +27,6 @@ vk::Framework::Context::Context(Framework &framework,
       commandFinishedFence(commandFinishedFence) {}
 
 vk::Framework::Context::~Context() {
-#ifdef DEBUG
-    std::cout << "[Context] context deconstructed" << std::endl;
-#endif
 }
 
 vk::Framework::Framework(GLFWwindow *window)
@@ -41,13 +39,10 @@ vk::Framework::Framework(GLFWwindow *window)
       commandPool_(CommandPool::create(physicalDevice_, device_)) {
     uint32_t imageCount = swapchain_->imageCount();
 
-    // create command buffer for each context
     for (int i = 0; i < imageCount; i++) { commandBuffers_.emplace_back(CommandBuffer::create(device_, commandPool_)); }
 
-    // create fence for each context
     for (int i = 0; i < imageCount; i++) { commandFinishedFences_.push_back(Fence::create(device_, true)); }
 
-    // create semaphore for each context for command procssed
     for (int i = 0; i < imageCount; i++) { commandProcessedSemaphores_.push_back(Semaphore::create(device_)); }
 
     for (int i = 0; i < imageCount; i++) {
@@ -67,13 +62,10 @@ vk::Framework::Framework(uint32_t width, uint32_t height)
       commandPool_(CommandPool::create(physicalDevice_, device_)) {
     uint32_t imageCount = swapchain_->imageCount();
 
-    // create command buffer for each context
     for (int i = 0; i < imageCount; i++) { commandBuffers_.emplace_back(CommandBuffer::create(device_, commandPool_)); }
 
-    // create fence for each context
     for (int i = 0; i < imageCount; i++) { commandFinishedFences_.push_back(Fence::create(device_, true)); }
 
-    // create semaphore for each context for command procssed
     for (int i = 0; i < imageCount; i++) { commandProcessedSemaphores_.push_back(Semaphore::create(device_)); }
 
     for (int i = 0; i < imageCount; i++) {
@@ -84,24 +76,19 @@ vk::Framework::Framework(uint32_t width, uint32_t height)
 }
 
 vk::Framework::~Framework() {
-#ifdef DEBUG
-    std::cout << "[Framework] framework deconstructed" << std::endl;
-#endif
 }
 
 std::shared_ptr<vk::Framework::Context> vk::Framework::acquireContext() {
     std::shared_ptr<Semaphore> imageAcquiredSemaphore = acquireSemaphore();
 
     uint32_t imageIndex;
-    if (vkAcquireNextImageKHR(device_->vkDevice(), swapchain_->vkSwapchain(), UINT64_MAX,
-                              imageAcquiredSemaphore->vkSemaphore(), VK_NULL_HANDLE, &imageIndex) != VK_SUCCESS) {
-        std::cerr << "Cannot acquire images from swapchain" << std::endl;
-        exit(EXIT_FAILURE);
-    }
+    vk::requireSuccess(vkAcquireNextImageKHR(device_->vkDevice(), swapchain_->vkSwapchain(), UINT64_MAX,
+                                             imageAcquiredSemaphore->vkSemaphore(), VK_NULL_HANDLE, &imageIndex),
+                       "vkAcquireNextImageKHR(legacy framework)");
 
     std::shared_ptr<Fence> fence = contexts_[imageIndex]->commandFinishedFence;
-    vkWaitForFences(device_->vkDevice(), 1, &fence->vkFence(), true, UINT64_MAX);
-    vkResetFences(device_->vkDevice(), 1, &fence->vkFence());
+    vk::waitForFence(device_->vkDevice(), fence->vkFence(), "vkWaitForFences(legacy framework)");
+    vk::requireSuccess(vkResetFences(device_->vkDevice(), 1, &fence->vkFence()), "vkResetFences(legacy framework)");
 
     if (contexts_[imageIndex]->imageAcquiredSemaphore != VK_NULL_HANDLE) {
         recycleSemaphore(contexts_[imageIndex]->imageAcquiredSemaphore);
@@ -132,13 +119,13 @@ void vk::Framework::present(std::shared_ptr<Context> context) {
     presentInfo.pSwapchains = &swapchain_->vkSwapchain();
     presentInfo.pImageIndices = &context->frameIndex;
 
-    VkResult res = vkQueuePresentKHR(device_->mainVkQueue(), &presentInfo);
-
-    // TODO: recreate swapchain
-    if (res != VK_SUCCESS) {
-        std::cerr << "failed to submit present command buffer" << std::endl;
-        exit(1);
+    VkResult res;
+    {
+        std::unique_lock<std::recursive_mutex> queueLock(device_->mainQueueMutex());
+        res = vkQueuePresentKHR(device_->mainVkQueue(), &presentInfo);
     }
+
+    vk::requireSuccess(res, "vkQueuePresentKHR(legacy framework)");
 }
 
 std::shared_ptr<vk::Instance> vk::Framework::instance() {
@@ -192,10 +179,8 @@ std::vector<std::shared_ptr<vk::Framework::Context>> &vk::Framework::contexts() 
 std::shared_ptr<vk::Semaphore> vk::Framework::acquireSemaphore() {
     std::shared_ptr<Semaphore> semaphore;
     if (recycledImageAcquiredSemaphores_.empty()) {
-        // std::cout << "no recycledSemaphores left, alloc new one: " << std::hex << semaphore << std::endl;
         semaphore = Semaphore::create(device_);
     } else {
-        // std::cout << "recycledSemaphores left, use existing one: " << std::hex << semaphore << std::endl;
         semaphore = recycledImageAcquiredSemaphores_.front();
         recycledImageAcquiredSemaphores_.pop();
     }

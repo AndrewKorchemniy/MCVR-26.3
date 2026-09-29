@@ -1,18 +1,11 @@
 #pragma once
 
-#include <volk.h>
 #include <memory>
 #include <vector>
+#include <volk.h>
 
 namespace mcvr {
-
-enum class UpscalerQualityMode {
-    NativeAA = 0,
-    Quality = 1,
-    Balanced = 2,
-    Performance = 3,
-    UltraPerformance = 4
-};
+enum class UpscalerQualityMode { NativeAA = 0, Quality = 1, Balanced = 2, Performance = 3, UltraPerformance = 4 };
 
 struct UpscalerConfig {
     VkDevice device;
@@ -82,20 +75,21 @@ struct UpscalerInput {
 };
 
 class FSR3Upscaler {
-public:
+  public:
     FSR3Upscaler();
     ~FSR3Upscaler();
 
-    bool initialize(const UpscalerConfig& config);
-    void dispatch(const UpscalerInput& input);
-    void resize(uint32_t renderWidth, uint32_t renderHeight,
-               uint32_t displayWidth, uint32_t displayHeight);
+    bool initialize(const UpscalerConfig &config);
+    void dispatch(const UpscalerInput &input);
+    void resize(uint32_t renderWidth, uint32_t renderHeight, uint32_t displayWidth, uint32_t displayHeight);
     void destroy();
 
-    const char* getName() const { return "AMD FSR 3"; }
+    const char *getName() const {
+        return "AMD FSR 3";
+    }
     bool isAvailable() const;
 
-private:
+  private:
     bool createContext();
     void destroyContext();
 
@@ -115,16 +109,9 @@ private:
     uint32_t m_displayWidth = 0;
     uint32_t m_displayHeight = 0;
 
-    void* m_fsrContext = nullptr;
+    void *m_fsrContext = nullptr;
 
     int32_t m_jitterPhaseCount = 0;
     int32_t m_jitterIndex = 0;
-
-    bool m_debugLogged = false;
-    uint32_t m_lastRenderWidth = 0;
-    uint32_t m_lastRenderHeight = 0;
-    uint32_t m_lastDisplayWidth = 0;
-    uint32_t m_lastDisplayHeight = 0;
 };
-
-} // namespace mcvr
+}

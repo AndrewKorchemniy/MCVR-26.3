@@ -1,0 +1,103 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#ifndef RASTER_VISIBILITY_WORKGROUP_SIZE
+#    define RASTER_VISIBILITY_WORKGROUP_SIZE 64
+#endif
+
+#ifndef RASTER_VISIBILITY_BOUNDS_CLASS_COUNT
+#    define RASTER_VISIBILITY_BOUNDS_CLASS_COUNT 3
+#endif
+
+layout(local_size_x = RASTER_VISIBILITY_WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+#include "common/shared.hpp"
+
+struct AccelerationStructureInstance {
+    vec4 transform0;
+    vec4 transform1;
+    vec4 transform2;
+    uint customIndexAndMask;
+    uint sbtOffsetAndFlags;
+    uint referenceLow;
+    uint referenceHigh;
+};
+
+struct RasterVisibilityHeader {
+    uint instanceCount;
+    uint boundsClassCount;
+    uint reserved0;
+    uint reserved1;
+};
+
+layout(set = 1, binding = 10, std430) readonly buffer TlasInstances {
+    AccelerationStructureInstance instances[];
+}
+tlasInstances;
+
+layout(set = 1, binding = 12, std430) buffer RasterVisibility {
+    RasterVisibilityHeader header;
+    uint visible[];
+}
+rasterVisibility;
+
+layout(set = 2, binding = 0) uniform WorldUniform {
+    WorldUBO worldUBO;
+};
+
+const uint RASTER_VISIBILITY_BOUNDS_CHUNK = 0u;
+const uint RASTER_VISIBILITY_BOUNDS_ENTITY = 1u;
+const uint RASTER_VISIBILITY_BOUNDS_CLOUDS = 2u;
+const vec3 RASTER_ENTITY_LOCAL_BOUNDS_MIN = vec3(-8.0);
+const vec3 RASTER_ENTITY_LOCAL_BOUNDS_MAX = vec3(8.0);
+
+vec3 transformPoint(AccelerationStructureInstance instance, vec3 position) {
+    return vec3(dot(instance.transform0.xyz, position) + instance.transform0.w,
+                dot(instance.transform1.xyz, position) + instance.transform1.w,
+                dot(instance.transform2.xyz, position) + instance.transform2.w);
+}
+
+bool outsideClipBox(AccelerationStructureInstance instance, vec3 localMin, vec3 localMax) {
+    mat4 worldToClip = worldUBO.cameraProjMat * worldUBO.cameraEffectedViewMat;
+    bool outsideLeft = true;
+    bool outsideRight = true;
+    bool outsideBottom = true;
+    bool outsideTop = true;
+    bool outsideNear = true;
+    bool outsideFar = true;
+
+    for (uint corner = 0u; corner < 8u; corner++) {
+        vec3 localPosition =
+            vec3((corner & 1u) == 0u ? localMin.x : localMax.x, (corner & 2u) == 0u ? localMin.y : localMax.y,
+                 (corner & 4u) == 0u ? localMin.z : localMax.z);
+        vec4 clipPosition = worldToClip * vec4(transformPoint(instance, localPosition), 1.0);
+        outsideLeft = outsideLeft && clipPosition.x < -clipPosition.w;
+        outsideRight = outsideRight && clipPosition.x > clipPosition.w;
+        outsideBottom = outsideBottom && clipPosition.y < -clipPosition.w;
+        outsideTop = outsideTop && clipPosition.y > clipPosition.w;
+        outsideNear = outsideNear && clipPosition.z < 0.0;
+        outsideFar = outsideFar && clipPosition.z > clipPosition.w;
+    }
+
+    return outsideLeft || outsideRight || outsideBottom || outsideTop || outsideNear || outsideFar;
+}
+
+bool isVisible(AccelerationStructureInstance instance, uint boundsClass) {
+    if (boundsClass == RASTER_VISIBILITY_BOUNDS_CHUNK) { return !outsideClipBox(instance, vec3(0.0), vec3(16.0)); }
+    if (boundsClass == RASTER_VISIBILITY_BOUNDS_CLOUDS) {
+        return !outsideClipBox(instance, vec3(-384.0, 0.0, -384.0), vec3(396.0, 4.0, 396.0));
+    }
+    return !outsideClipBox(instance, RASTER_ENTITY_LOCAL_BOUNDS_MIN, RASTER_ENTITY_LOCAL_BOUNDS_MAX);
+}
+
+void main() {
+    uint visibilityIndex = gl_GlobalInvocationID.x;
+    uint boundsClassCount = rasterVisibility.header.boundsClassCount;
+    uint visibilityCount = rasterVisibility.header.instanceCount * boundsClassCount;
+    if (visibilityIndex >= visibilityCount) { return; }
+
+    uint instanceIndex = visibilityIndex / boundsClassCount;
+    uint boundsClass = visibilityIndex - instanceIndex * boundsClassCount;
+    AccelerationStructureInstance instance = tlasInstances.instances[instanceIndex];
+    rasterVisibility.visible[visibilityIndex] = isVisible(instance, boundsClass) ? 1u : 0u;
+}

@@ -1,0 +1,110 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "common/shared.hpp"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+shared float reactiveTile[400];
+shared float depthTile[529];
+
+layout(set = 0, binding = 0, r16f) uniform readonly image2D currentDepthImage;
+layout(set = 0, binding = 1, rg16f) uniform readonly image2D motionImage;
+layout(set = 0, binding = 2, r16f) uniform readonly image2D previousDepthImage;
+layout(set = 0, binding = 3, r8) uniform writeonly image2D reactiveImage;
+layout(set = 0, binding = 4, r16f) uniform writeonly image2D historyDepthImage;
+
+layout(set = 1, binding = 0) uniform WorldUniform {
+    WorldUBO worldUBO;
+};
+layout(set = 1, binding = 1) uniform LastWorldUniform {
+    WorldUBO lastWorldUBO;
+};
+
+layout(push_constant) uniform ReactiveParams {
+    uint hasHistory;
+} params;
+
+bool finiteValue(float value) {
+    return !isnan(value) && !isinf(value);
+}
+
+float historyReactivity(ivec2 pixel, ivec2 size, ivec2 tileCoord, float depth) {
+    if (params.hasHistory == 0u || !finiteValue(depth) || depth <= 0.0) { return 0.0; }
+    vec2 motion = imageLoad(motionImage, pixel).xy;
+    if (any(isnan(motion)) || any(isinf(motion))) { return 0.0; }
+    vec2 previousPixel = vec2(pixel) + motion + worldUBO.cameraJitter - lastWorldUBO.cameraJitter;
+    if (any(lessThan(previousPixel, vec2(0.0))) || any(greaterThan(previousPixel, vec2(size - 1)))) { return 0.0; }
+
+    vec2 ndc = (vec2(pixel) + 0.5 + worldUBO.cameraJitter) / vec2(size) * 2.0 - 1.0;
+    vec4 view = worldUBO.cameraProjMatInv * vec4(ndc, 0.0, 1.0);
+    if (!finiteValue(view.z) || abs(view.z) <= 1e-8) { return 0.0; }
+    vec3 position = (worldUBO.cameraEffectedViewMatInv * vec4(view.xyz * (-depth / view.z), 1.0)).xyz;
+    position += vec3(worldUBO.cameraPos.xyz - lastWorldUBO.cameraPos.xyz);
+    float expectedDepth = -(lastWorldUBO.cameraEffectedViewMat * vec4(position, 1.0)).z;
+    if (!finiteValue(expectedDepth) || expectedDepth <= 0.0) { return 0.0; }
+
+    ivec2 base = ivec2(floor(previousPixel));
+    float minimumDepth = 65504.0;
+    float maximumDepth = 0.0;
+    for (int y = 0; y < 2; ++y) {
+        for (int x = 0; x < 2; ++x) {
+            ivec2 previousCoord = clamp(base + ivec2(x, y), ivec2(0), size - 1);
+            float previousDepth = imageLoad(previousDepthImage, previousCoord).r;
+            if (finiteValue(previousDepth) && previousDepth > 0.0) {
+                minimumDepth = min(minimumDepth, previousDepth);
+                maximumDepth = max(maximumDepth, previousDepth);
+            }
+        }
+    }
+    if (maximumDepth <= 0.0) { return 0.0; }
+    float threshold = max(0.02, expectedDepth * 0.01);
+    if (expectedDepth >= minimumDepth - threshold && expectedDepth <= maximumDepth + threshold) { return 0.0; }
+    float currentMinimumDepth = depth;
+    float currentMaximumDepth = depth;
+    for (int y = -1; y <= 2; ++y) {
+        for (int x = -1; x <= 2; ++x) {
+            float currentDepth = depthTile[(tileCoord.y + y + 1) * 23 + tileCoord.x + x + 1];
+            if (finiteValue(currentDepth) && currentDepth > 0.0) {
+                currentMinimumDepth = min(currentMinimumDepth, currentDepth);
+                currentMaximumDepth = max(currentMaximumDepth, currentDepth);
+            }
+        }
+    }
+    vec3 worldRay = mat3(worldUBO.cameraEffectedViewMatInv) * (view.xyz / -view.z);
+    float depthScale = -(mat3(lastWorldUBO.cameraEffectedViewMat) * worldRay).z;
+    if (!finiteValue(depthScale) || depthScale <= 0.0) { return 0.0; }
+    float expectedMinimum = expectedDepth + (currentMinimumDepth - depth) * depthScale;
+    float expectedMaximum = expectedDepth + (currentMaximumDepth - depth) * depthScale;
+    float difference = max(max(minimumDepth - expectedMaximum, expectedMinimum - maximumDepth), 0.0);
+    return 0.9 * smoothstep(threshold, threshold * 2.0, difference);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(currentDepthImage);
+    ivec2 tileOrigin = ivec2(gl_WorkGroupID.xy) * 16 - 2;
+    for (uint index = gl_LocalInvocationIndex; index < 529u; index += 256u) {
+        ivec2 samplePixel = clamp(tileOrigin - 1 + ivec2(index % 23u, index / 23u), ivec2(0), size - 1);
+        depthTile[index] = imageLoad(currentDepthImage, samplePixel).r;
+    }
+    barrier();
+    for (uint index = gl_LocalInvocationIndex; index < 400u; index += 256u) {
+        ivec2 tileCoord = ivec2(index % 20u, index / 20u);
+        ivec2 samplePixel = clamp(tileOrigin + tileCoord, ivec2(0), size - 1);
+        float sampleDepth = depthTile[(tileCoord.y + 1) * 23 + tileCoord.x + 1];
+        reactiveTile[index] = historyReactivity(samplePixel, size, tileCoord, sampleDepth);
+    }
+    barrier();
+    if (any(greaterThanEqual(pixel, size))) { return; }
+    float depth = depthTile[(gl_LocalInvocationID.y + 3u) * 23u + gl_LocalInvocationID.x + 3u];
+    imageStore(historyDepthImage, pixel, vec4(depth));
+    float reactivity = 0.0;
+    for (uint y = 0u; y < 5u; ++y) {
+        for (uint x = 0u; x < 5u; ++x) {
+            uint index = (gl_LocalInvocationID.y + y) * 20u + gl_LocalInvocationID.x + x;
+            reactivity = max(reactivity, reactiveTile[index]);
+        }
+    }
+    imageStore(reactiveImage, pixel, vec4(reactivity));
+}

@@ -1,15 +1,15 @@
 #version 460
 
 #ifndef VPT_POST_ENABLE_MOTION_BLUR
-#define VPT_POST_ENABLE_MOTION_BLUR 0
+#    define VPT_POST_ENABLE_MOTION_BLUR 0
 #endif
 
 #ifndef VPT_POST_MOTION_BLUR_STRENGTH
-#define VPT_POST_MOTION_BLUR_STRENGTH 1.35
+#    define VPT_POST_MOTION_BLUR_STRENGTH 1.35
 #endif
 
 #ifndef VPT_POST_MOTION_BLUR_SAMPLE_COUNT
-#define VPT_POST_MOTION_BLUR_SAMPLE_COUNT 10
+#    define VPT_POST_MOTION_BLUR_SAMPLE_COUNT 10
 #endif
 
 layout(set = 3, binding = 0) uniform sampler2D postInputLdr;

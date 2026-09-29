@@ -1,8 +1,10 @@
 #include "core/render/modules/world/temporal_accumulation/temporal_accumulation_module.hpp"
 
+#include "core/profiler/profiler.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
+#include <algorithm>
 
 TemporalAccumulationModule::TemporalAccumulationModule() {}
 
@@ -15,8 +17,10 @@ void TemporalAccumulationModule::init(std::shared_ptr<Framework> framework,
     hdrNoisyImages_.resize(size);
     motionVectorImages_.resize(size);
     normalRoughnessImages_.resize(size);
+    linearDepthImages_.resize(size);
     accumulatedRadianceOutImages_.resize(size);
     accumulatedNormalOutImages_.resize(size);
+    accumulatedDepthOutImages_.resize(size);
 }
 
 bool TemporalAccumulationModule::setOrCreateInputImages(std::vector<std::shared_ptr<vk::DeviceLocalImage>> &images,
@@ -52,6 +56,15 @@ bool TemporalAccumulationModule::setOrCreateInputImages(std::vector<std::shared_
         normalRoughnessImages_[frameIndex] = images[2];
     }
 
+    if (images[3] == nullptr) {
+        linearDepthImages_[frameIndex] = images[3] = vk::DeviceLocalImage::create(
+            framework->device(), framework->vma(), false, width_, height_, 1, formats[3],
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    } else {
+        if (images[3]->width() != width_ || images[3]->height() != height_) return false;
+        linearDepthImages_[frameIndex] = images[3];
+    }
+
     return true;
 }
 
@@ -68,7 +81,26 @@ bool TemporalAccumulationModule::setOrCreateOutputImages(std::vector<std::shared
     return true;
 }
 
-void TemporalAccumulationModule::setAttributes(int attributeCount, std::vector<std::string> &attributeKVs) {}
+void TemporalAccumulationModule::setAttributes(int attributeCount, std::vector<std::string> &attributeKVs) {
+    auto parseFloat = [](const std::string &value, float fallback) {
+        try {
+            return std::stof(value);
+        } catch (...) { return fallback; }
+    };
+
+    for (int i = 0; i < attributeCount; i++) {
+        const std::string &key = attributeKVs[2 * i];
+        const std::string &value = attributeKVs[2 * i + 1];
+
+        if (key == "render_pipeline.module.temporal_accumulation.attribute.alpha") {
+            alpha_ = std::clamp(parseFloat(value, alpha_), 0.01f, 1.0f);
+        } else if (key == "render_pipeline.module.temporal_accumulation.attribute.depth_threshold") {
+            depthThreshold_ = std::max(parseFloat(value, depthThreshold_), 0.0f);
+        } else if (key == "render_pipeline.module.temporal_accumulation.attribute.depth_scale") {
+            depthScale_ = std::max(parseFloat(value, depthScale_), 0.0f);
+        }
+    }
+}
 
 void TemporalAccumulationModule::build() {
     auto framework = framework_.lock();
@@ -107,7 +139,7 @@ void TemporalAccumulationModule::initDescriptorTables() {
 
     for (int i = 0; i < size; i++) {
         descriptorTables_[i] = vk::DescriptorTableBuilder{}
-                                   .beginDescriptorLayoutSet() // set 0
+                                   .beginDescriptorLayoutSet()
                                    .beginDescriptorLayoutSetBinding()
                                    .defineDescriptorLayoutSetBinding({
                                        .binding = 0,
@@ -135,6 +167,18 @@ void TemporalAccumulationModule::initDescriptorTables() {
                                    })
                                    .defineDescriptorLayoutSetBinding({
                                        .binding = 4,
+                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       .descriptorCount = 1,
+                                       .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
+                                   })
+                                   .defineDescriptorLayoutSetBinding({
+                                       .binding = 5,
+                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       .descriptorCount = 1,
+                                       .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
+                                   })
+                                   .defineDescriptorLayoutSetBinding({
+                                       .binding = 6,
                                        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                        .descriptorCount = 1,
                                        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT,
@@ -167,16 +211,27 @@ void TemporalAccumulationModule::initImages() {
         normalRoughnessImages_[0]->vkFormat(),
         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
 
+    accumulatedDepthImage_ = vk::DeviceLocalImage::create(
+        framework->device(), framework->vma(), false, hdrNoisyImages_[0]->width(), hdrNoisyImages_[0]->height(), 1,
+        linearDepthImages_[0]->vkFormat(),
+        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+
     for (int i = 0; i < size; i++) {
         descriptorTables_[i]->bindSamplerImageForShader(sampler_, hdrNoisyImages_[i], 0, 0);
         descriptorTables_[i]->bindSamplerImageForShader(sampler_, accumulatedRadianceImage_, 0, 1);
         descriptorTables_[i]->bindSamplerImageForShader(sampler_, motionVectorImages_[i], 0, 2);
         descriptorTables_[i]->bindSamplerImageForShader(sampler_, normalRoughnessImages_[i], 0, 3);
         descriptorTables_[i]->bindSamplerImageForShader(sampler_, accumulatedNormalImage_, 0, 4);
+        descriptorTables_[i]->bindSamplerImageForShader(sampler_, linearDepthImages_[i], 0, 5);
+        descriptorTables_[i]->bindSamplerImageForShader(sampler_, accumulatedDepthImage_, 0, 6);
 
         accumulatedNormalOutImages_[i] = vk::DeviceLocalImage::create(
             framework->device(), framework->vma(), false, hdrNoisyImages_[0]->width(), hdrNoisyImages_[0]->height(), 1,
             normalRoughnessImages_[0]->vkFormat(),
+            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+        accumulatedDepthOutImages_[i] = vk::DeviceLocalImage::create(
+            framework->device(), framework->vma(), false, hdrNoisyImages_[0]->width(), hdrNoisyImages_[0]->height(), 1,
+            linearDepthImages_[0]->vkFormat(),
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     }
 }
@@ -185,7 +240,6 @@ void TemporalAccumulationModule::initRenderPass() {
     renderPass_ = vk::RenderPassBuilder{}
                       .beginAttachmentDescription()
                       .defineAttachmentDescription({
-                          // color
                           .format = accumulatedRadianceOutImages_[0]->vkFormat(),
                           .samples = VK_SAMPLE_COUNT_1_BIT,
                           .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -196,8 +250,17 @@ void TemporalAccumulationModule::initRenderPass() {
                           .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                       })
                       .defineAttachmentDescription({
-                          // color
                           .format = accumulatedNormalOutImages_[0]->vkFormat(),
+                          .samples = VK_SAMPLE_COUNT_1_BIT,
+                          .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                          .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                          .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                          .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                          .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      })
+                      .defineAttachmentDescription({
+                          .format = accumulatedDepthOutImages_[0]->vkFormat(),
                           .samples = VK_SAMPLE_COUNT_1_BIT,
                           .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                           .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -216,11 +279,15 @@ void TemporalAccumulationModule::initRenderPass() {
                           .attachment = 1,
                           .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                       })
+                      .defineAttachmentReference({
+                          .attachment = 2,
+                          .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                      })
                       .endAttachmentReference()
                       .beginSubpassDescription()
                       .defineSubpassDescription({
                           .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-                          .colorAttachmentIndices = {0, 1},
+                          .colorAttachmentIndices = {0, 1, 2},
                       })
                       .endSubpassDescription()
                       .build(framework_.lock()->device());
@@ -237,6 +304,7 @@ void TemporalAccumulationModule::initFrameBuffers() {
                                .beginAttachment()
                                .defineAttachment(accumulatedRadianceOutImages_[i])
                                .defineAttachment(accumulatedNormalOutImages_[i])
+                               .defineAttachment(accumulatedDepthOutImages_[i])
                                .endAttachment()
                                .build(framework->device(), renderPass_);
     }
@@ -245,6 +313,10 @@ void TemporalAccumulationModule::initFrameBuffers() {
 void TemporalAccumulationModule::initPipeline() {
     auto framework = framework_.lock();
     std::filesystem::path shaderPath = Renderer::folderPath / "shaders";
+    const VkExtent2D outputExtent = {
+        .width = accumulatedRadianceOutImages_[0]->width(),
+        .height = accumulatedRadianceOutImages_[0]->height(),
+    };
     vertShader_ =
         vk::Shader::create(framework->device(), (shaderPath / "world/temporal_accumulation/tmp_acc_vert.spv").string());
     fragShader_ =
@@ -262,15 +334,15 @@ void TemporalAccumulationModule::initPipeline() {
                             {
                                 .x = 0,
                                 .y = 0,
-                                .width = static_cast<float>(framework->swapchain()->vkExtent().width),
-                                .height = static_cast<float>(framework->swapchain()->vkExtent().height),
+                                .width = static_cast<float>(outputExtent.width),
+                                .height = static_cast<float>(outputExtent.height),
                                 .minDepth = 0.0,
                                 .maxDepth = 1.0,
                             },
                         .scissor =
                             {
                                 .offset = {.x = 0, .y = 0},
-                                .extent = framework->swapchain()->vkExtent(),
+                                .extent = outputExtent,
                             },
                     })
                     .defineDepthStencilState({
@@ -281,8 +353,9 @@ void TemporalAccumulationModule::initPipeline() {
                         .stencilTestEnable = VK_FALSE,
                     })
                     .beginColorBlendAttachmentState()
-                    .defineDefaultColorBlendAttachmentState() // color
-                    .defineDefaultColorBlendAttachmentState() // normal
+                    .defineDefaultColorBlendAttachmentState()
+                    .defineDefaultColorBlendAttachmentState()
+                    .defineDefaultColorBlendAttachmentState()
                     .endColorBlendAttachmentState()
                     .definePipelineLayout(descriptorTables_[0])
                     .build(framework->device());
@@ -297,15 +370,19 @@ TemporalAccumulationModuleContext::TemporalAccumulationModuleContext(
       hdrNoisyImage(temporalAccumulationModule->hdrNoisyImages_[frameworkContext->frameIndex]),
       motionVectorImage(temporalAccumulationModule->motionVectorImages_[frameworkContext->frameIndex]),
       normalRoughnessImage(temporalAccumulationModule->normalRoughnessImages_[frameworkContext->frameIndex]),
+      linearDepthImage(temporalAccumulationModule->linearDepthImages_[frameworkContext->frameIndex]),
       descriptorTable(temporalAccumulationModule->descriptorTables_[frameworkContext->frameIndex]),
       framebuffer(temporalAccumulationModule->framebuffers_[frameworkContext->frameIndex]),
       accumulatedRadianceImage(temporalAccumulationModule->accumulatedRadianceImage_),
       accumulatedNormalImage(temporalAccumulationModule->accumulatedNormalImage_),
+      accumulatedDepthImage(temporalAccumulationModule->accumulatedDepthImage_),
       accumulatedNormalOutImage(temporalAccumulationModule->accumulatedNormalOutImages_[frameworkContext->frameIndex]),
+      accumulatedDepthOutImage(temporalAccumulationModule->accumulatedDepthOutImages_[frameworkContext->frameIndex]),
       accumulatedRadianceOutImage(
           temporalAccumulationModule->accumulatedRadianceOutImages_[frameworkContext->frameIndex]) {}
 
 void TemporalAccumulationModuleContext::render() {
+    MCVR_PROFILE_SCOPE("native.TemporalAccumulationModuleContext.render");
     auto context = frameworkContext.lock();
     auto framework = context->framework.lock();
     auto worldCommandBuffer = context->worldCommandBuffer;
@@ -332,6 +409,8 @@ void TemporalAccumulationModuleContext::render() {
     VkAccessFlags2 outputSrcAccess = 0;
     VkPipelineStageFlags2 normalOutputSrcStage = 0;
     VkAccessFlags2 normalOutputSrcAccess = 0;
+    VkPipelineStageFlags2 depthOutputSrcStage = 0;
+    VkAccessFlags2 depthOutputSrcAccess = 0;
 
     chooseSrc(hdrNoisyImage->imageLayout(),
               VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
@@ -352,6 +431,13 @@ void TemporalAccumulationModuleContext::render() {
                   VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
               VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, normalSrcStage, normalSrcAccess);
 
+    VkPipelineStageFlags2 depthSrcStage = 0;
+    VkAccessFlags2 depthSrcAccess = 0;
+    chooseSrc(linearDepthImage->imageLayout(),
+              VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                  VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+              VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT, depthSrcStage, depthSrcAccess);
+
     chooseSrc(accumulatedRadianceImage->imageLayout(),
               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
               VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, historySrcStage, historySrcAccess);
@@ -362,6 +448,13 @@ void TemporalAccumulationModuleContext::render() {
               VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
               VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, normalHistorySrcStage,
               normalHistorySrcAccess);
+
+    VkPipelineStageFlags2 depthHistorySrcStage = 0;
+    VkAccessFlags2 depthHistorySrcAccess = 0;
+    chooseSrc(accumulatedDepthImage->imageLayout(),
+              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+              VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT, depthHistorySrcStage,
+              depthHistorySrcAccess);
 
     chooseSrc(accumulatedRadianceOutImage->imageLayout(),
               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -375,9 +468,17 @@ void TemporalAccumulationModuleContext::render() {
                   VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
               normalOutputSrcStage, normalOutputSrcAccess);
 
+    chooseSrc(accumulatedDepthOutImage->imageLayout(),
+              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+              VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                  VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+              depthOutputSrcStage, depthOutputSrcAccess);
+
     TemporalAccumulationPushConstant pc{};
     pc.alpha = module->alpha_;
-    pc.threshold = module->threshold_;
+    pc.normalThreshold = module->threshold_;
+    pc.depthThreshold = module->depthThreshold_;
+    pc.depthScale = module->depthScale_;
 
     vkCmdPushConstants(worldCommandBuffer->vkCommandBuffer(), descriptorTable->vkPipelineLayout(),
                        VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(TemporalAccumulationPushConstant), &pc);
@@ -420,6 +521,18 @@ void TemporalAccumulationModuleContext::render() {
                  .subresourceRange = vk::wholeColorSubresourceRange,
              },
              {
+                 .srcStageMask = depthSrcStage,
+                 .srcAccessMask = depthSrcAccess,
+                 .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .oldLayout = linearDepthImage->imageLayout(),
+                 .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 .srcQueueFamilyIndex = mainQueueIndex,
+                 .dstQueueFamilyIndex = mainQueueIndex,
+                 .image = linearDepthImage,
+                 .subresourceRange = vk::wholeColorSubresourceRange,
+             },
+             {
                  .srcStageMask = historySrcStage,
                  .srcAccessMask = historySrcAccess,
                  .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -441,6 +554,18 @@ void TemporalAccumulationModuleContext::render() {
                  .srcQueueFamilyIndex = mainQueueIndex,
                  .dstQueueFamilyIndex = mainQueueIndex,
                  .image = accumulatedNormalImage,
+                 .subresourceRange = vk::wholeColorSubresourceRange,
+             },
+             {
+                 .srcStageMask = depthHistorySrcStage,
+                 .srcAccessMask = depthHistorySrcAccess,
+                 .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .oldLayout = accumulatedDepthImage->imageLayout(),
+                 .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                 .srcQueueFamilyIndex = mainQueueIndex,
+                 .dstQueueFamilyIndex = mainQueueIndex,
+                 .image = accumulatedDepthImage,
                  .subresourceRange = vk::wholeColorSubresourceRange,
              },
              {
@@ -466,20 +591,37 @@ void TemporalAccumulationModuleContext::render() {
                  .dstQueueFamilyIndex = mainQueueIndex,
                  .image = accumulatedNormalOutImage,
                  .subresourceRange = vk::wholeColorSubresourceRange,
+             },
+             {
+                 .srcStageMask = depthOutputSrcStage,
+                 .srcAccessMask = depthOutputSrcAccess,
+                 .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                 .oldLayout = accumulatedDepthOutImage->imageLayout(),
+                 .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                 .srcQueueFamilyIndex = mainQueueIndex,
+                 .dstQueueFamilyIndex = mainQueueIndex,
+                 .image = accumulatedDepthOutImage,
+                 .subresourceRange = vk::wholeColorSubresourceRange,
              }});
     hdrNoisyImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     motionVectorImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     normalRoughnessImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    linearDepthImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     accumulatedRadianceImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     accumulatedNormalImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    accumulatedDepthImage->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     accumulatedRadianceOutImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     accumulatedNormalOutImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    accumulatedDepthOutImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     worldCommandBuffer->beginRenderPass({
         .renderPass = module->renderPass_,
         .framebuffer = framebuffer,
         .renderAreaExtent = {accumulatedRadianceOutImage->width(), accumulatedRadianceOutImage->height()},
-        .clearValues = {{.color = {0.0f, 0.0f, 0.0f, 1.0f}}, {.color = {0.0f, 0.0f, 0.0f, 1.0f}}},
+        .clearValues = {{.color = {0.0f, 0.0f, 0.0f, 1.0f}},
+                        {.color = {0.0f, 0.0f, 0.0f, 1.0f}},
+                        {.color = {65504.0f, 0.0f, 0.0f, 0.0f}}},
     });
 
     worldCommandBuffer->bindGraphicsPipeline(module->pipeline_)
@@ -488,6 +630,7 @@ void TemporalAccumulationModuleContext::render() {
         ->endRenderPass();
     accumulatedRadianceOutImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     accumulatedNormalOutImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    accumulatedDepthOutImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     worldCommandBuffer->barriersBufferImage(
         {}, {{
@@ -515,6 +658,18 @@ void TemporalAccumulationModuleContext::render() {
                  .subresourceRange = vk::wholeColorSubresourceRange,
              },
              {
+                 .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                 .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                 .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
+                 .oldLayout = accumulatedDepthOutImage->imageLayout(),
+                 .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 .srcQueueFamilyIndex = mainQueueIndex,
+                 .dstQueueFamilyIndex = mainQueueIndex,
+                 .image = accumulatedDepthOutImage,
+                 .subresourceRange = vk::wholeColorSubresourceRange,
+             },
+             {
                  .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                  .srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                  .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -537,13 +692,26 @@ void TemporalAccumulationModuleContext::render() {
                  .dstQueueFamilyIndex = mainQueueIndex,
                  .image = accumulatedNormalImage,
                  .subresourceRange = vk::wholeColorSubresourceRange,
+             },
+             {
+                 .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                 .srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                 .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                 .oldLayout = accumulatedDepthImage->imageLayout(),
+                 .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 .srcQueueFamilyIndex = mainQueueIndex,
+                 .dstQueueFamilyIndex = mainQueueIndex,
+                 .image = accumulatedDepthImage,
+                 .subresourceRange = vk::wholeColorSubresourceRange,
              }});
     accumulatedRadianceOutImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     accumulatedNormalOutImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    accumulatedDepthOutImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     accumulatedRadianceImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     accumulatedNormalImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    accumulatedDepthImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
-    // TODO: add to command buffer
     {
         VkImageBlit imageBlit{};
         imageBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -586,5 +754,27 @@ void TemporalAccumulationModuleContext::render() {
         vkCmdBlitImage(worldCommandBuffer->vkCommandBuffer(), accumulatedNormalOutImage->vkImage(),
                        accumulatedNormalOutImage->imageLayout(), accumulatedNormalImage->vkImage(),
                        accumulatedNormalImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
+    }
+
+    {
+        VkImageBlit imageBlit{};
+        imageBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        imageBlit.srcSubresource.mipLevel = 0;
+        imageBlit.srcSubresource.baseArrayLayer = 0;
+        imageBlit.srcSubresource.layerCount = 1;
+        imageBlit.srcOffsets[0] = {0, 0, 0};
+        imageBlit.srcOffsets[1] = {static_cast<int>(accumulatedDepthOutImage->width()),
+                                   static_cast<int>(accumulatedDepthOutImage->height()), 1};
+        imageBlit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        imageBlit.dstSubresource.mipLevel = 0;
+        imageBlit.dstSubresource.baseArrayLayer = 0;
+        imageBlit.dstSubresource.layerCount = 1;
+        imageBlit.dstOffsets[0] = {0, 0, 0};
+        imageBlit.dstOffsets[1] = {static_cast<int>(accumulatedDepthImage->width()),
+                                   static_cast<int>(accumulatedDepthImage->height()), 1};
+
+        vkCmdBlitImage(worldCommandBuffer->vkCommandBuffer(), accumulatedDepthOutImage->vkImage(),
+                       accumulatedDepthOutImage->imageLayout(), accumulatedDepthImage->vkImage(),
+                       accumulatedDepthImage->imageLayout(), 1, &imageBlit, VK_FILTER_NEAREST);
     }
 }

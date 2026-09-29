@@ -1,27 +1,27 @@
 #version 460
 
 #ifndef VPT_POST_DOF_AUTO_FOCUS
-#define VPT_POST_DOF_AUTO_FOCUS 1
+#    define VPT_POST_DOF_AUTO_FOCUS 1
 #endif
 
 #ifndef VPT_POST_DOF_AUTO_FOCUS_RADIUS
-#define VPT_POST_DOF_AUTO_FOCUS_RADIUS 0.012
+#    define VPT_POST_DOF_AUTO_FOCUS_RADIUS 0.012
 #endif
 
 #ifndef VPT_POST_DOF_FOCUS_DISTANCE
-#define VPT_POST_DOF_FOCUS_DISTANCE 12.0
+#    define VPT_POST_DOF_FOCUS_DISTANCE 12.0
 #endif
 
 #ifndef VPT_POST_DOF_FOCUS_SPEED
-#define VPT_POST_DOF_FOCUS_SPEED 0.2
+#    define VPT_POST_DOF_FOCUS_SPEED 0.2
 #endif
 
 #ifndef VPT_POST_DOF_FOCUS_HISTORY_READY
-#define VPT_POST_DOF_FOCUS_HISTORY_READY false
+#    define VPT_POST_DOF_FOCUS_HISTORY_READY false
 #endif
 
 #ifndef VPT_POST_DOF_PREVIOUS_FOCUS_BINDING
-#define VPT_POST_DOF_PREVIOUS_FOCUS_BINDING 5
+#    define VPT_POST_DOF_PREVIOUS_FOCUS_BINDING 5
 #endif
 
 layout(set = 3, binding = 1) uniform sampler2D postFirstHitDepth;
@@ -30,17 +30,15 @@ layout(set = 4, binding = VPT_POST_DOF_PREVIOUS_FOCUS_BINDING) uniform sampler2D
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 0) out float outFocusDistance;
 
-const vec2 VPT_AUTO_FOCUS_OFFSETS[9] = vec2[](
-    vec2(0.0, 0.0),
-    vec2(0.0, -1.0),
-    vec2(1.0, 0.0),
-    vec2(0.0, 1.0),
-    vec2(-1.0, 0.0),
-    vec2(0.7071, -0.7071),
-    vec2(0.7071, 0.7071),
-    vec2(-0.7071, 0.7071),
-    vec2(-0.7071, -0.7071)
-);
+const vec2 VPT_AUTO_FOCUS_OFFSETS[9] = vec2[](vec2(0.0, 0.0),
+                                              vec2(0.0, -1.0),
+                                              vec2(1.0, 0.0),
+                                              vec2(0.0, 1.0),
+                                              vec2(-1.0, 0.0),
+                                              vec2(0.7071, -0.7071),
+                                              vec2(0.7071, 0.7071),
+                                              vec2(-0.7071, 0.7071),
+                                              vec2(-0.7071, -0.7071));
 
 vec2 clampUv(vec2 uv, vec2 texelSize) {
     return clamp(uv, texelSize * 0.5, vec2(1.0) - texelSize * 0.5);
@@ -75,9 +73,7 @@ void main() {
     for (int i = 0; i < 9; ++i) {
         vec2 uv = clampUv(vec2(0.5) + VPT_AUTO_FOCUS_OFFSETS[i] * sampleRadius, texelSize);
         float depthValue = sampleRawDepth(uv);
-        if (depthValue <= 0.0) {
-            continue;
-        }
+        if (depthValue <= 0.0) { continue; }
 
         depths[validCount] = depthValue;
         ++validCount;
@@ -103,9 +99,7 @@ void main() {
             bandDepth = sum / max(count, 1);
         }
 
-        if (centerDepth <= 0.0) {
-            centerDepth = medianDepth;
-        }
+        if (centerDepth <= 0.0) { centerDepth = medianDepth; }
 
         float farBlend = smoothstep(16.0, 96.0, max(centerDepth, bandDepth));
         targetFocus = mix(centerDepth, bandDepth, farBlend);

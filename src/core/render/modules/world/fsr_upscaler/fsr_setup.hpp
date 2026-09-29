@@ -1,7 +1,7 @@
 // This file is part of the FidelityFX SDK.
 //
 // Copyright (C) 2024 Advanced Micro Devices, Inc.
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -25,8 +25,8 @@
 #include <volk.h>
 
 #ifdef MCVR_ENABLE_FFX_UPSCALER
-#include <ffx_api/ffx_api.hpp>
-#include <ffx_api/ffx_api_types.h>
+#    include <ffx_api/ffx_api.hpp>
+#    include <ffx_api/ffx_api_types.h>
 #endif
 
 namespace mcvr::fsr {
@@ -37,4 +37,4 @@ PFN_vkVoidFunction customVkGetDeviceProcAddr(VkDevice device, const char *pName)
 void messageCallback(uint32_t type, const wchar_t *message);
 #endif
 
-} // namespace mcvr::fsr
+}

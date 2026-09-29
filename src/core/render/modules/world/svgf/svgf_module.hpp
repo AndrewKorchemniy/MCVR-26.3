@@ -44,7 +44,6 @@ class SvgfModule : public WorldModule, public SharedObject<SvgfModule> {
     std::vector<std::shared_ptr<WorldModuleContext>> contexts_;
     std::shared_ptr<SvgfDenoiser> m_denoiser;
 
-    // Image Resources
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> diffuseRadianceImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> specularRadianceImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> directRadianceImages_;
@@ -72,7 +71,6 @@ class SvgfModuleContext : public WorldModuleContext, public SharedObject<SvgfMod
   private:
     std::weak_ptr<SvgfModule> svgfModule;
 
-    // Inputs
     std::shared_ptr<vk::DeviceLocalImage> diffuseRadianceImage;
     std::shared_ptr<vk::DeviceLocalImage> specularRadianceImage;
     std::shared_ptr<vk::DeviceLocalImage> directRadianceImage;
@@ -84,7 +82,6 @@ class SvgfModuleContext : public WorldModuleContext, public SharedObject<SvgfMod
     std::shared_ptr<vk::DeviceLocalImage> clearRadianceImage;
     std::shared_ptr<vk::DeviceLocalImage> baseEmissionImage;
 
-    // Outputs
     std::shared_ptr<vk::DeviceLocalImage> denoisedRadianceImage;
     std::shared_ptr<vk::DeviceLocalImage> denoisedDiffuseRadianceImage;
     std::shared_ptr<vk::DeviceLocalImage> denoisedSpecularRadianceImage;

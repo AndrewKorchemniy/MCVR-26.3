@@ -28,6 +28,8 @@ _deps
 CMakeUserPresets.json
 .cache
 build*
+!src/core/render/build_geometry.hpp
+!src/core/render/build_geometry.cpp
 
 ###### C++ ######
 # Prerequisites
@@ -82,3 +84,9 @@ bin/*
 ###### CLion ######
 .idea
 cmake-build*
+
+###### Docs / Markdown ######
+*.md
+*.markdown
+!docs/advanced_shader_architecture.md
+!docs/aeroforge_1080p_performance.md

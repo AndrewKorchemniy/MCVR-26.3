@@ -4,10 +4,8 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -15,10 +13,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-std::ostream &shaderCout() {
-    return std::cout << "[Shader] ";
-}
 
 std::ostream &shaderCerr() {
     return std::cerr << "[Shader] ";
@@ -159,10 +153,6 @@ vk::Shader::Shader(std::shared_ptr<Device> device, std::string path) : device_(d
         shaderCerr() << "failed to create shader module for " << path << std::endl;
         exit(EXIT_FAILURE);
     }
-
-#ifdef DEBUG
-    shaderCout() << "created shader module for " << path << std::endl;
-#endif
 }
 
 vk::Shader::Shader(std::shared_ptr<Device> device,
@@ -172,9 +162,8 @@ vk::Shader::Shader(std::shared_ptr<Device> device,
                    std::vector<std::string> includeDirectories,
                    std::string injectedSource)
     : device_(device), path_(sourcePath) {
-    auto compileResult =
-        compileGlslToSpv(std::move(sourcePath), stage, std::move(definitions), std::move(includeDirectories),
-                         std::move(injectedSource));
+    auto compileResult = compileGlslToSpv(std::move(sourcePath), stage, std::move(definitions),
+                                          std::move(includeDirectories), std::move(injectedSource));
     createModule(compileResult.spirv, compileResult.sourcePath);
 }
 
@@ -200,8 +189,9 @@ std::filesystem::path vk::ShaderSpirvCache::makeCanonical(const std::filesystem:
     return errorCode ? path.lexically_normal() : result;
 }
 
-std::optional<uint64_t> vk::ShaderSpirvCache::computeDependencyHash(const std::string &sourcePath,
-                                                                    const std::vector<std::string> &includeDirectories) {
+std::optional<uint64_t>
+vk::ShaderSpirvCache::computeDependencyHash(const std::string &sourcePath,
+                                            const std::vector<std::string> &includeDirectories) {
     std::unordered_map<std::string, std::optional<uint64_t>> hashCache;
     std::unordered_set<std::string> visitingPaths;
     return computeFileDependencyHash(sourcePath, includeDirectories, hashCache, visitingPaths);
@@ -216,6 +206,7 @@ std::string vk::ShaderSpirvCache::computeCompiledHash(const std::string &sourceP
     uint64_t hash = hashSeed_;
     updateHashString(hash, makeCanonical(sourcePath).string());
     updateHashValue(hash, stage);
+    updateHashString(hash, "shaderc_optimization_level_performance");
     updateHashValue(hash, dependencyHash);
     std::vector<std::pair<std::string, std::string>> sortedDefinitions(definitions.begin(), definitions.end());
     std::sort(sortedDefinitions.begin(), sortedDefinitions.end());
@@ -323,9 +314,8 @@ vk::ShaderSpirvCache::computeFileDependencyHash(const std::filesystem::path &sha
         return std::string(line.substr(pathStart, i - pathStart));
     };
 
-    auto resolveIncludePath =
-        [&](const std::filesystem::path &requestingPath,
-            std::string_view includePath) -> std::optional<std::filesystem::path> {
+    auto resolveIncludePath = [&](const std::filesystem::path &requestingPath,
+                                  std::string_view includePath) -> std::optional<std::filesystem::path> {
         std::error_code errorCode;
         std::filesystem::path relativeCandidate = requestingPath.parent_path() / std::filesystem::path(includePath);
         if (std::filesystem::exists(relativeCandidate, errorCode) &&
@@ -383,19 +373,17 @@ void vk::ShaderSpirvCache::trimCacheDirectory(const std::filesystem::path &cache
     }
     if (entries.size() <= maxFiles) return;
     std::sort(entries.begin(), entries.end());
-    for (size_t i = 0; i < entries.size() - maxFiles; i++) {
-        std::filesystem::remove(entries[i].second, errorCode);
-    }
+    for (size_t i = 0; i < entries.size() - maxFiles; i++) { std::filesystem::remove(entries[i].second, errorCode); }
 }
 
-vk::Shader::CompileResult
-vk::Shader::compileGlslToSpv(std::string sourcePath,
-                             VkShaderStageFlagBits stage,
-                             std::unordered_map<std::string, std::string> definitions,
-                             std::vector<std::string> includeDirectories,
-                             std::string injectedSource,
-                             const std::filesystem::path &cacheDir) {
-    std::optional<uint64_t> dependencyHash = vk::ShaderSpirvCache::computeDependencyHash(sourcePath, includeDirectories);
+vk::Shader::CompileResult vk::Shader::compileGlslToSpv(std::string sourcePath,
+                                                       VkShaderStageFlagBits stage,
+                                                       std::unordered_map<std::string, std::string> definitions,
+                                                       std::vector<std::string> includeDirectories,
+                                                       std::string injectedSource,
+                                                       const std::filesystem::path &cacheDir) {
+    std::optional<uint64_t> dependencyHash =
+        vk::ShaderSpirvCache::computeDependencyHash(sourcePath, includeDirectories);
 #ifdef DEBUG
     bool cacheReadFailed = false;
     std::string cacheFilePath;
@@ -403,7 +391,7 @@ vk::Shader::compileGlslToSpv(std::string sourcePath,
 
     if (!cacheDir.empty() && dependencyHash.has_value()) {
         std::string hash = vk::ShaderSpirvCache::computeCompiledHash(sourcePath, stage, definitions, includeDirectories,
-                                                                 injectedSource, *dependencyHash);
+                                                                     injectedSource, *dependencyHash);
         std::error_code errorCode;
         std::filesystem::path cacheFile = cacheDir / (hash + ".spv");
 #ifdef DEBUG
@@ -464,7 +452,7 @@ vk::Shader::compileGlslToSpv(std::string sourcePath,
 
     if (!cacheDir.empty() && dependencyHash.has_value()) {
         std::string hash = vk::ShaderSpirvCache::computeCompiledHash(sourcePath, stage, definitions, includeDirectories,
-                                                                    injectedSource, *dependencyHash);
+                                                                     injectedSource, *dependencyHash);
         vk::ShaderSpirvCache::writeCachedSpirv(cacheDir / (hash + ".spv"), spirv);
     }
 
@@ -490,10 +478,6 @@ void vk::Shader::createModule(const std::vector<uint32_t> &spirv, const std::str
         shaderCerr() << "failed to create shader module for " << sourcePath << std::endl;
         exit(EXIT_FAILURE);
     }
-
-#ifdef DEBUG
-    shaderCout() << "created runtime shader module for " << sourcePath << std::endl;
-#endif
 }
 
 vk::Shader::~Shader() {

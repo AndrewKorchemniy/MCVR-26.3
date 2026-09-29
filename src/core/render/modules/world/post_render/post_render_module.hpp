@@ -6,11 +6,13 @@
 #include "core/render/modules/world/shader_pack/shader_pack.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
 #include <nlohmann/json.hpp>
+#include <random>
+#include <variant>
 
 #include "core/render/modules/world/world_module.hpp"
 
 class Framework;
-class FrameworkContext;
+struct FrameworkContext;
 class WorldPipeline;
 struct WorldModuleContext;
 class ShaderPack;
@@ -50,18 +52,25 @@ class PostRenderModule : public WorldModule, public SharedObject<PostRenderModul
   private:
     using ExecutionVariable = ShaderPack::ExecutionVariable;
     using ExecutionVariables = ShaderPack::ExecutionVariables;
+    using PostRenderPassVariant = std::variant<std::shared_ptr<FullScreenPass>, std::shared_ptr<RenderPass>>;
 
     static constexpr uint32_t histSize = 256;
     static constexpr int weatherPostFlag = 0b0001;
     static constexpr int particlePostFlag = 0b0010;
     static constexpr int textPostFlag = 0b0100;
     static constexpr int nameTagPostFlag = 0b1000;
+    static constexpr int worldOverlayPostFlag = 0b10000;
 
     static constexpr std::string_view TARGET_LDR = "out:ldr";
     static constexpr std::string_view TARGET_FIRST_HIT_DEPTH = "out:first_hit_depth";
     static constexpr std::string_view TARGET_HDR = "out:hdr";
     static constexpr std::string_view TARGET_MOTION_VECTOR = "out:motion_vector";
     static constexpr std::string_view TARGET_NORMAL_ROUGHNESS = "out:normal_roughness";
+    // Match the pack resource so refraction copies and samples at post-render resolution.
+    static constexpr std::string_view TARGET_POST_SCENE_COLOR = "post_scene_color";
+
+    struct PostRenderExecutionRuntime;
+    struct PostRenderPassExecutionOp;
 
     void initDescriptorTables();
     void initImages();
@@ -71,33 +80,39 @@ class PostRenderModule : public WorldModule, public SharedObject<PostRenderModul
     void initPipeline();
     void initExecutionVariables();
     void ensureDynamicPipelines();
+    void compileExecutionProgram();
     std::vector<ExpressionEvaluator::Variable> executionExpressionVariables() const;
-    double evaluateNumericExpression(const std::string &expression,
-                                     const ExecutionVariables &variables);
+    double evaluateNumericExpression(const std::string &expression, const ExecutionVariables &variables);
     std::optional<std::reference_wrapper<ShaderPackLoader::VariableConfig>>
     findExecutionVariableConfig(std::string_view name);
     void uploadExecutionBuffer(const std::shared_ptr<vk::DeviceLocalBuffer> &executionBuffer,
                                PostRenderModuleContext &context,
                                const std::unordered_map<std::string, ExecutionVariable> &variables);
+    void bindPostRefractionSourceImage(uint32_t frameIndex);
     std::shared_ptr<vk::DeviceLocalImage> findBuiltInImage(const std::string &name, uint32_t frameIndex);
     std::shared_ptr<vk::DeviceLocalImage> findTargetImage(const std::string &target, uint32_t frameIndex);
     static RenderPass::Target parseRenderContent(const std::string &content);
     static int renderTargetPostFlag(RenderPass::Target target);
-    static bool renderTargetDefaultDepthWrite(RenderPass::Target target);
     static VkCompareOp parseDepthCompare(const std::string &value);
+    static const RenderPass::ShaderVariant *findShaderVariant(const RenderPass &pass, std::string_view contentName);
+    static float sampleUnitFloat(std::mt19937 &randomGenerator);
+    static glm::vec3 sampleUnitSphereDirection(std::mt19937 &randomGenerator);
+    static vk::VertexFormat::EntityPBRVertex buildStarVertex(glm::vec3 direction, glm::vec4 color);
+    uint32_t scaledInputExtent(uint32_t outputExtent) const;
+    void updateInputExtent();
 
   private:
-    // input
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> ldrImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> firstHitDepthImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> hdrImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> motionVectorImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> normalRoughnessImages_;
 
-    // post render
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> worldPostDepthImages_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> postRefractionSourceImages_;
     std::vector<std::shared_ptr<vk::Sampler>> postPassColorSamplers_;
     std::vector<std::shared_ptr<vk::Sampler>> postPassDepthSamplers_;
+    std::vector<std::shared_ptr<vk::Sampler>> postRefractionSourceSamplers_;
 
     std::vector<std::shared_ptr<vk::Sampler>> samplers_;
 
@@ -109,7 +124,6 @@ class PostRenderModule : public WorldModule, public SharedObject<PostRenderModul
     std::vector<std::shared_ptr<vk::Framebuffer>> worldPostColorToDepthFramebuffers_;
     std::shared_ptr<vk::GraphicsPipeline> worldPostColorToDepthPipeline_;
 
-    // world star field
     std::shared_ptr<vk::DeviceLocalBuffer> starFieldVertexBuffer;
     std::shared_ptr<vk::Shader> fullScreenVertexShader_;
 
@@ -120,11 +134,11 @@ class PostRenderModule : public WorldModule, public SharedObject<PostRenderModul
     std::unordered_map<std::string, std::shared_ptr<FullScreenPass>> passNameToPass_;
     std::vector<std::shared_ptr<RenderPass>> renderPasses_;
     std::unordered_map<std::string, std::shared_ptr<RenderPass>> renderPassNameToPass_;
+    std::unique_ptr<ShaderPack::SequentialOp> compiledExecutionProgram_;
     bool isDynamicPipelinesReady_ = false;
 
-    // output
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> postRenderedImages_;
-    std::vector<uint8_t> postRenderedInitialized_;
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> outputImages_;
 
     std::vector<std::shared_ptr<WorldModuleContext>> contexts_;
 
@@ -132,27 +146,30 @@ class PostRenderModule : public WorldModule, public SharedObject<PostRenderModul
     float starSizeMin_ = 0.5f;
     float starSizeMax_ = 0.7f;
     float starRadius_ = 400.0f;
+    float renderPrecision_ = 1.0f;
 
-    uint32_t width_, height_;
+    uint32_t width_ = 0;
+    uint32_t height_ = 0;
+    uint32_t inputWidth_ = 0;
+    uint32_t inputHeight_ = 0;
 };
 
 struct PostRenderModuleContext : public WorldModuleContext, SharedObject<PostRenderModuleContext> {
     std::weak_ptr<PostRenderModule> postRenderModule;
 
-    // input
     std::shared_ptr<vk::DeviceLocalImage> ldrImage;
     std::shared_ptr<vk::DeviceLocalImage> firstHitDepthImage;
     std::shared_ptr<vk::DeviceLocalImage> hdrImage;
     std::shared_ptr<vk::DeviceLocalImage> motionVectorImage;
     std::shared_ptr<vk::DeviceLocalImage> normalRoughnessImage;
+    std::shared_ptr<vk::DeviceLocalImage> segmentationMaskImage;
 
-    // post render
     std::shared_ptr<vk::DeviceLocalImage> worldPostDepthImage;
     std::shared_ptr<vk::DescriptorTable> descriptorTable;
     std::shared_ptr<vk::Framebuffer> worldPostColorToDepthFramebuffer;
 
-    // output
     std::shared_ptr<vk::DeviceLocalImage> postRenderedImage;
+    std::shared_ptr<vk::DeviceLocalImage> outputImage;
 
     PostRenderModuleContext(std::shared_ptr<FrameworkContext> frameworkContext,
                             std::shared_ptr<WorldPipelineContext> worldPipelineContext,

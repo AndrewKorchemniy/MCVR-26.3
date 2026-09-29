@@ -9,12 +9,12 @@ class TemplateModule;
 struct TemplateModuleContext;
 
 class TemplateSub : public SharedObject<TemplateSub> {
-    public:
+  public:
     TemplateSub();
-     
+
     void init(std::shared_ptr<TemplateModule>);
 
-    private:
+  private:
     std::weak_ptr<TemplateModule> templateModule_;
 };
 

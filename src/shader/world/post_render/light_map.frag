@@ -26,12 +26,8 @@ void main() {
     float block_brightness = get_brightness(floor(texCoord.x * 16) / 15) * lightMapUbo.blockFactor;
     float sky_brightness = get_brightness(floor(texCoord.y * 16) / 15) * lightMapUbo.skyFactor;
 
-    // cubic nonsense, dips to yellowish in the middle, white when fully saturated
-    vec3 color = vec3(
-        block_brightness,
-        block_brightness * ((block_brightness * 0.6 + 0.4) * 0.6 + 0.4),
-        block_brightness * (block_brightness * block_brightness * 0.6 + 0.4)
-    );
+    vec3 color = vec3(block_brightness, block_brightness * ((block_brightness * 0.6 + 0.4) * 0.6 + 0.4),
+                      block_brightness * (block_brightness * block_brightness * 0.6 + 0.4));
 
     if (lightMapUbo.useBrightLightmap != 0) {
         color = mix(color, vec3(0.99, 1.12, 1.0), 0.25);
@@ -45,7 +41,7 @@ void main() {
     }
 
     if (lightMapUbo.nightVisionFactor > 0.0) {
-        // scale up uniformly until 1.0 is hit by one of the colors
+
         float max_component = max(color.r, max(color.g, color.b));
         if (max_component < 1.0) {
             vec3 bright_color = color / max_component;
@@ -53,9 +49,7 @@ void main() {
         }
     }
 
-    if (lightMapUbo.useBrightLightmap == 0) {
-        color = clamp(color - vec3(lightMapUbo.darknessScale), 0.0, 1.0);
-    }
+    if (lightMapUbo.useBrightLightmap == 0) { color = clamp(color - vec3(lightMapUbo.darknessScale), 0.0, 1.0); }
 
     vec3 notGamma = notGamma(color);
     color = mix(color, notGamma, lightMapUbo.brightnessFactor);
