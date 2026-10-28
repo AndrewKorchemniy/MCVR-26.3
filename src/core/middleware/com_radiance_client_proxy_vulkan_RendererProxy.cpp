@@ -9,6 +9,7 @@
 #include "core/render/renderer.hpp"
 #include "core/render/textures.hpp"
 #include "core/render/world.hpp"
+#include "core/util/crash_handler.hpp"
 
 #include <algorithm>
 #include <string>
@@ -78,6 +79,7 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_initR
     jobjectArray enabledInstanceExtensions,
     jobjectArray enabledDeviceExtensions) {
     MCVR_PROFILE_SCOPE("jni.RendererProxy.initRendererWithVulkanDevice");
+    mcvr::installCrashHandler();
     try {
         VulkanHandles handles;
         handles.instance = reinterpret_cast<VkInstance>(static_cast<uintptr_t>(instance));

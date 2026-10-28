@@ -195,24 +195,37 @@ Framework::Framework() {}
 void Framework::init(VulkanHandles handles) {
     MCVR_PROFILE_SCOPE("native.Framework.init");
     vk::ResourceMemoryTagScope memoryTag("framework");
+    auto step = [](const char *name) { std::fprintf(stderr, "[MCVR] init: %s\n", name); };
+    step("instance");
     instance_ = vk::Instance::create(handles.instance, handles.enabledInstanceExtensions);
+    step("window");
     window_ = vk::Window::create(instance_, handles.surface);
+    step("physical device");
     physicalDevice_ = vk::PhysicalDevice::create(instance_, handles.physicalDevice, handles.queues);
+    step("device");
     device_ = vk::Device::create(instance_, physicalDevice_, handles.device, handles.enabledDeviceExtensions);
     // The device was created with bufferDeviceAddress (part of Radiance's required feature set), which VMA needs.
+    step("vma");
     vma_ = vk::VMA::create(instance_, physicalDevice_, device_);
+    step("swapchain");
     swapchain_ = vk::Swapchain::create(physicalDevice_, device_, window_);
+    step("command pools");
     mainCommandPool_ = vk::CommandPool::create(physicalDevice_, device_);
     asyncCommandPool_ = vk::CommandPool::create(physicalDevice_, device_, physicalDevice_->secondaryQueueIndex());
     frameResourceRetainer_ = FrameResourceRetainer::create(shared_from_this());
     worldAsyncCommandBuffer_ = vk::CommandBuffer::create(device_, asyncCommandPool_);
 
+    step("frame resources");
     createFrameResources();
 
+    step("ui composite");
     uiComposite_ = UiComposite::create(shared_from_this());
+    step("pipeline");
     pipeline_ = Pipeline::create(shared_from_this());
+    step("frame generation");
     frameGenerationManager_ = mcvr::FrameGenerationManager::create();
     frameGenerationManager_->init(shared_from_this());
+    step("done");
 }
 
 Framework::~Framework() {
