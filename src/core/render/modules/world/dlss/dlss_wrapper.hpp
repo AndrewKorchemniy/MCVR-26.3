@@ -143,6 +143,16 @@ class NgxContext : public SharedObject<NgxContext> {
                                                    std::shared_ptr<vk::PhysicalDevice> physicalDevice,
                                                    std::vector<VkExtensionProperties> &extensions);
 
+    // The same queries on raw handles, for asking before Minecraft creates its device.
+    static NVSDK_NGX_Result getDlssRRRequiredDeviceExtensions(VkInstance instance,
+                                                              VkPhysicalDevice physicalDevice,
+                                                              std::vector<VkExtensionProperties> &extensions);
+    static NVSDK_NGX_Result getDlssSRRequiredDeviceExtensions(VkInstance instance,
+                                                              VkPhysicalDevice physicalDevice,
+                                                              std::vector<VkExtensionProperties> &extensions);
+    static NVSDK_NGX_Result getDlssFrameGenerationRequiredDeviceExtensions(
+        VkInstance instance, VkPhysicalDevice physicalDevice, std::vector<VkExtensionProperties> &extensions);
+
   private:
     NgxContext(const NgxContext &) = delete;
     NgxContext(const NgxContext &&) = delete;

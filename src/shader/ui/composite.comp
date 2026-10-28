@@ -12,6 +12,34 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, rgba8) uniform image2D finalColor;
 layout(binding = 1) uniform sampler2D uiColor;
+// The world as rendered, sampled with a linear filter; only read while blurRadius > 0.
+layout(binding = 2) uniform sampler2D worldColor;
+
+layout(push_constant) uniform PushConstants {
+    // Minecraft's menu background blurriness, in pixels at the composite's resolution; 0 leaves the world sharp.
+    float blurRadius;
+};
+
+// Minecraft blurs the world behind blurred menus, but its blur only reaches the UI surface. This approximates its
+// Gaussian with a 9x9 grid of bilinear taps spread over two radii.
+vec3 blurredWorld(ivec2 pixel, ivec2 size) {
+    const int taps = 4;
+    float spacing = blurRadius * 0.5;
+    float sigma = blurRadius;
+    vec2 texel = 1.0 / vec2(size);
+    vec2 center = (vec2(pixel) + 0.5) * texel;
+    vec3 sum = vec3(0.0);
+    float weightSum = 0.0;
+    for (int y = -taps; y <= taps; y++) {
+        for (int x = -taps; x <= taps; x++) {
+            vec2 offset = vec2(x, y) * spacing;
+            float weight = exp(-dot(offset, offset) / (2.0 * sigma * sigma));
+            sum += textureLod(worldColor, center + offset * texel, 0.0).rgb * weight;
+            weightSum += weight;
+        }
+    }
+    return sum / weightSum;
+}
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -19,12 +47,12 @@ void main() {
     if (pixel.x >= size.x || pixel.y >= size.y) { return; }
 
     vec4 ui = texelFetch(uiColor, pixel, 0);
-    vec4 world = imageLoad(finalColor, pixel);
+    vec3 world = blurRadius > 0.0 ? blurredWorld(pixel, size) : imageLoad(finalColor, pixel).rgb;
 
 #if UI_PREMULTIPLIED
-    vec3 color = ui.rgb + world.rgb * (1.0 - ui.a);
+    vec3 color = ui.rgb + world * (1.0 - ui.a);
 #else
-    vec3 color = mix(world.rgb, ui.rgb, ui.a);
+    vec3 color = mix(world, ui.rgb, ui.a);
 #endif
 
     imageStore(finalColor, pixel, vec4(color, 1.0));

@@ -328,8 +328,8 @@ class NgxFeatureExtensionQuery {
         return NVSDK_NGX_Result_Success;
     }
 
-    static NVSDK_NGX_Result getRequiredDeviceExtensionsForFeature(std::shared_ptr<vk::Instance> instance,
-                                                                  std::shared_ptr<vk::PhysicalDevice> physicalDevice,
+    static NVSDK_NGX_Result getRequiredDeviceExtensionsForFeature(VkInstance instance,
+                                                                  VkPhysicalDevice physicalDevice,
                                                                   NVSDK_NGX_Feature feature,
                                                                   const char *featureName,
                                                                   std::vector<VkExtensionProperties> &extensions) {
@@ -347,7 +347,7 @@ class NgxFeatureExtensionQuery {
         VkExtensionProperties *props;
 
         NVSDK_NGX_Result result = NVSDK_NGX_VULKAN_GetFeatureDeviceExtensionRequirements(
-            instance->vkInstance(), physicalDevice->vkPhysicalDevice(), &info, &numExtensions, &props);
+            instance, physicalDevice, &info, &numExtensions, &props);
         if (NVSDK_NGX_FAILED(result)) {
             LOGW << ws2s(GetNGXResultAsString(result)) << " while querying " << featureName
                  << " device extensions; skipping." << std::endl;
@@ -379,21 +379,39 @@ NgxContext::getDlssFrameGenerationRequiredInstanceExtensions(std::vector<VkExten
 NVSDK_NGX_Result NgxContext::getDlssRRRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
                                                                std::shared_ptr<vk::PhysicalDevice> physicalDevice,
                                                                std::vector<VkExtensionProperties> &extensions) {
-    return NgxFeatureExtensionQuery::getRequiredDeviceExtensionsForFeature(
-        instance, physicalDevice, NVSDK_NGX_Feature_RayReconstruction, "DLSS ray reconstruction", extensions);
+    return getDlssRRRequiredDeviceExtensions(instance->vkInstance(), physicalDevice->vkPhysicalDevice(), extensions);
 }
 
 NVSDK_NGX_Result NgxContext::getDlssSRRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
                                                                std::shared_ptr<vk::PhysicalDevice> physicalDevice,
                                                                std::vector<VkExtensionProperties> &extensions) {
-    return NgxFeatureExtensionQuery::getRequiredDeviceExtensionsForFeature(
-        instance, physicalDevice, NVSDK_NGX_Feature_SuperSampling, "DLSS super resolution", extensions);
+    return getDlssSRRequiredDeviceExtensions(instance->vkInstance(), physicalDevice->vkPhysicalDevice(), extensions);
 }
 
 NVSDK_NGX_Result
 NgxContext::getDlssFrameGenerationRequiredDeviceExtensions(std::shared_ptr<vk::Instance> instance,
                                                            std::shared_ptr<vk::PhysicalDevice> physicalDevice,
                                                            std::vector<VkExtensionProperties> &extensions) {
+    return getDlssFrameGenerationRequiredDeviceExtensions(instance->vkInstance(), physicalDevice->vkPhysicalDevice(),
+                                                          extensions);
+}
+
+NVSDK_NGX_Result NgxContext::getDlssRRRequiredDeviceExtensions(VkInstance instance,
+                                                               VkPhysicalDevice physicalDevice,
+                                                               std::vector<VkExtensionProperties> &extensions) {
+    return NgxFeatureExtensionQuery::getRequiredDeviceExtensionsForFeature(
+        instance, physicalDevice, NVSDK_NGX_Feature_RayReconstruction, "DLSS ray reconstruction", extensions);
+}
+
+NVSDK_NGX_Result NgxContext::getDlssSRRequiredDeviceExtensions(VkInstance instance,
+                                                               VkPhysicalDevice physicalDevice,
+                                                               std::vector<VkExtensionProperties> &extensions) {
+    return NgxFeatureExtensionQuery::getRequiredDeviceExtensionsForFeature(
+        instance, physicalDevice, NVSDK_NGX_Feature_SuperSampling, "DLSS super resolution", extensions);
+}
+
+NVSDK_NGX_Result NgxContext::getDlssFrameGenerationRequiredDeviceExtensions(
+    VkInstance instance, VkPhysicalDevice physicalDevice, std::vector<VkExtensionProperties> &extensions) {
     return NgxFeatureExtensionQuery::getRequiredDeviceExtensionsForFeature(
         instance, physicalDevice, NVSDK_NGX_Feature_FrameGeneration, "DLSS frame generation", extensions);
 }

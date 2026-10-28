@@ -4,6 +4,8 @@
 #include "core/all_extern.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
 
+#include <atomic>
+#include <mutex>
 #include <vector>
 
 class Framework;
@@ -53,12 +55,39 @@ class UiComposite : public SharedObject<UiComposite> {
     // Records the world copy, the UI copy and the composite into the frame's overlay command buffer.
     void record(std::shared_ptr<FrameworkContext> context, bool worldRendered);
 
+    // Blurs the world under the UI in the next recorded frame, for menus with a blurred background. Minecraft's own
+    // blur only reaches the UI surface, which does not hold the world. A radius of 0 turns it off.
+    void setWorldBlurRadius(float radius);
+
+    // Copies the next recorded frame (world and UI, as presented) into a readback buffer.
+    void requestScreenshot();
+    // The size of a captured screenshot, or 0x0 while none is waiting to be read.
+    VkExtent2D screenshotSize();
+    // Waits for the captured frame and copies it to dst as tightly packed, top-down RGBA8. Returns false if no
+    // screenshot was captured or its size differs from width x height.
+    bool readScreenshot(void *dst, uint32_t width, uint32_t height);
+
   private:
+    struct PushConstants {
+        float blurRadius;
+    };
+
     std::weak_ptr<Framework> framework_;
     std::shared_ptr<UiSurfaceImage> uiSurface_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> finalColorImages_;
     std::vector<std::shared_ptr<vk::DeviceLocalImage>> uiCopyImages_;
+    // The world as rendered, which the composite samples with a linear filter while the world is blurred.
+    std::vector<std::shared_ptr<vk::DeviceLocalImage>> worldCopyImages_;
     std::vector<std::shared_ptr<vk::DescriptorTable>> descriptorTables_;
     std::shared_ptr<vk::Sampler> sampler_;
+    std::shared_ptr<vk::Sampler> linearSampler_;
     std::shared_ptr<vk::ComputePipeline> pipeline_;
+
+    std::atomic<float> worldBlurRadius_ = 0.0f;
+
+    std::mutex screenshotMutex_;
+    bool screenshotRequested_ = false;
+    bool screenshotCaptured_ = false;
+    VkExtent2D screenshotExtent_ = {0, 0};
+    std::shared_ptr<vk::HostVisibleBuffer> screenshotBuffer_;
 };

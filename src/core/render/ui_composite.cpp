@@ -6,6 +6,8 @@
 #include "core/render/renderer.hpp"
 #include "core/vulkan/resource_memory_tracker.hpp"
 
+#include <algorithm>
+#include <cstring>
 #include <stdexcept>
 
 void UiSurfaceImage::setTarget(VkImage image, VkImageView imageView, uint32_t width, uint32_t height) {
@@ -85,9 +87,12 @@ void UiComposite::init(std::shared_ptr<Framework> framework) {
 
     sampler_ = vk::Sampler::create(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST,
                                    VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    linearSampler_ = vk::Sampler::create(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST,
+                                         VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
 
     finalColorImages_.resize(frameCount);
     uiCopyImages_.resize(frameCount);
+    worldCopyImages_.resize(frameCount);
     descriptorTables_.resize(frameCount);
     for (uint32_t i = 0; i < frameCount; i++) {
         finalColorImages_[i] = vk::DeviceLocalImage::create(
@@ -95,6 +100,9 @@ void UiComposite::init(std::shared_ptr<Framework> framework) {
             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
         uiCopyImages_[i] = vk::DeviceLocalImage::create(device, framework->vma(), false, extent.width, extent.height, 1,
                                                         VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT);
+        worldCopyImages_[i] = vk::DeviceLocalImage::create(device, framework->vma(), false, extent.width,
+                                                           extent.height, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                                                           VK_IMAGE_USAGE_SAMPLED_BIT);
 
         descriptorTables_[i] = vk::DescriptorTableBuilder{}
                                    .beginDescriptorLayoutSet()
@@ -111,12 +119,25 @@ void UiComposite::init(std::shared_ptr<Framework> framework) {
                                        .descriptorCount = 1,
                                        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
                                    })
+                                   .defineDescriptorLayoutSetBinding({
+                                       .binding = 2,
+                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       .descriptorCount = 1,
+                                       .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                                   })
                                    .endDescriptorLayoutSetBinding()
                                    .endDescriptorLayoutSet()
+                                   .definePushConstant({
+                                       .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                                       .offset = 0,
+                                       .size = sizeof(PushConstants),
+                                   })
                                    .build(device);
         descriptorTables_[i]->bindImage(finalColorImages_[i], VK_IMAGE_LAYOUT_GENERAL, 0, 0);
         descriptorTables_[i]->bindSamplerImage(sampler_, uiCopyImages_[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0,
                                                1, 0);
+        descriptorTables_[i]->bindSamplerImage(linearSampler_, worldCopyImages_[i],
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, 2, 0);
     }
 
     auto shader =
@@ -172,6 +193,10 @@ void UiComposite::record(std::shared_ptr<FrameworkContext> context, bool worldRe
 
     auto worldImage = context->framework.lock()->pipeline()->acquirePipelineContext(context)->worldPipelineContext;
     const bool copyWorld = worldRendered && worldImage != nullptr && worldImage->outputImage != nullptr;
+    // A blur request lasts one frame: Minecraft asks again every frame its blurred menu is drawn.
+    const float blurRadius = worldBlurRadius_.exchange(0.0f);
+    const bool blurWorld = copyWorld && blurRadius > 0.0f;
+    auto worldCopy = worldCopyImages_.at(context->frameIndex);
 
     if (copyWorld) {
         auto world = worldImage->outputImage;
@@ -195,6 +220,14 @@ void UiComposite::record(std::shared_ptr<FrameworkContext> context, bool worldRe
         vkCmdBlitImage(commandBuffer->vkCommandBuffer(), world->vkImage(), world->imageLayout(),
                        finalImage->vkImage(), finalImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
 
+        if (blurWorld) {
+            commandBuffer->barriersBufferImage(
+                {}, {imageBarrier(worldCopy, worldCopy->imageLayout(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)});
+            worldCopy->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            vkCmdBlitImage(commandBuffer->vkCommandBuffer(), world->vkImage(), world->imageLayout(),
+                           worldCopy->vkImage(), worldCopy->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
+        }
+
         commandBuffer->barriersBufferImage(
             {}, {imageBarrier(world, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, worldRestoreLayout),
                  imageBarrier(finalImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL)});
@@ -212,6 +245,13 @@ void UiComposite::record(std::shared_ptr<FrameworkContext> context, bool worldRe
         commandBuffer->barriersBufferImage(
             {}, {imageBarrier(finalImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL)});
         finalImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
+    }
+
+    // The composite always binds the world copy, so keep it in the layout its descriptor names even when unused.
+    if (worldCopy->imageLayout() != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        commandBuffer->barriersBufferImage(
+            {}, {imageBarrier(worldCopy, worldCopy->imageLayout(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)});
+        worldCopy->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     }
 
     if (uiSurface_->valid()) {
@@ -238,8 +278,12 @@ void UiComposite::record(std::shared_ptr<FrameworkContext> context, bool worldRe
                  imageBarrier(finalImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL)});
         uiCopy->imageLayout() = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        commandBuffer->bindDescriptorTable(descriptorTables_[context->frameIndex], VK_PIPELINE_BIND_POINT_COMPUTE)
+        auto descriptorTable = descriptorTables_[context->frameIndex];
+        commandBuffer->bindDescriptorTable(descriptorTable, VK_PIPELINE_BIND_POINT_COMPUTE)
             ->bindComputePipeline(pipeline_);
+        PushConstants pushConstants{.blurRadius = blurWorld ? blurRadius : 0.0f};
+        vkCmdPushConstants(commandBuffer->vkCommandBuffer(), descriptorTable->vkPipelineLayout(),
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
         vkCmdDispatch(commandBuffer->vkCommandBuffer(), (finalImage->width() + 15) / 16, (finalImage->height() + 15) / 16,
                       1);
 
@@ -247,4 +291,66 @@ void UiComposite::record(std::shared_ptr<FrameworkContext> context, bool worldRe
         // Minecraft's next frame writes the surface again; order those writes after the copy above.
         fullBarrier();
     }
+
+    std::scoped_lock screenshotLock(screenshotMutex_);
+    if (screenshotRequested_) {
+        screenshotRequested_ = false;
+        const uint32_t width = finalImage->width();
+        const uint32_t height = finalImage->height();
+        const size_t size = static_cast<size_t>(width) * height * 4;
+        if (screenshotBuffer_ == nullptr || screenshotBuffer_->size() != size) {
+            framework->frameResourceRetainer().retain(screenshotBuffer_);
+            screenshotBuffer_ =std::make_shared<vk::HostVisibleBuffer>(framework->vma(), framework->device(), size,
+                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        }
+        fullBarrier();
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {width, height, 1};
+        vkCmdCopyImageToBuffer(commandBuffer->vkCommandBuffer(), finalImage->vkImage(), VK_IMAGE_LAYOUT_GENERAL,
+                               screenshotBuffer_->vkBuffer(), 1, &region);
+        commandBuffer->barriersMemory({{
+            .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+            .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+            .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+        }});
+        screenshotCaptured_ = true;
+        screenshotExtent_ = {width, height};
+    }
+}
+
+void UiComposite::setWorldBlurRadius(float radius) {
+    worldBlurRadius_.store(std::max(radius, 0.0f));
+}
+
+void UiComposite::requestScreenshot() {
+    std::scoped_lock lock(screenshotMutex_);
+    screenshotRequested_ = true;
+}
+
+VkExtent2D UiComposite::screenshotSize() {
+    std::scoped_lock lock(screenshotMutex_);
+    return screenshotCaptured_ ? screenshotExtent_ : VkExtent2D{0, 0};
+}
+
+bool UiComposite::readScreenshot(void *dst, uint32_t width, uint32_t height) {
+    auto framework = framework_.lock();
+    if (framework == nullptr || dst == nullptr) return false;
+    std::scoped_lock lock(screenshotMutex_);
+    if (!screenshotCaptured_ || screenshotExtent_.width != width || screenshotExtent_.height != height) {
+        return false;
+    }
+    screenshotCaptured_ = false;
+    {
+        // The copy was recorded into a frame that has been submitted by now; screenshots are rare enough to wait for
+        // the whole queue rather than that frame's fence.
+        auto device = framework->device();
+        std::scoped_lock queueLock(device->mainQueueMutex());
+        vkQueueWaitIdle(device->mainVkQueue());
+    }
+    const size_t size = static_cast<size_t>(width) * height * 4;
+    screenshotBuffer_->downloadFromBuffer(size, 0);
+    std::memcpy(dst, screenshotBuffer_->mappedPtr(), size);
+    return true;
 }
