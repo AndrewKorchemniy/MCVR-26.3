@@ -8,11 +8,9 @@ class Device;
 class Semaphore : public SharedObject<Semaphore> {
   public:
     Semaphore(std::shared_ptr<Device> device);
-    Semaphore(std::shared_ptr<Device> device, bool exportable);
     ~Semaphore();
 
     VkSemaphore &vkSemaphore();
-    uint64_t exportHandle();
 
   private:
     std::shared_ptr<Device> device_;

@@ -34,10 +34,6 @@ message(STATUS "Install lib dir: ${MCVR_INSTALL_LIB_DIR}")
 
 include_directories(${MCVR_INCLUDE_DIR})
 
-# GLFW
-add_subdirectory(extern/glfw EXCLUDE_FROM_ALL)
-set(GLFW_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/extern/glfw/include)
-
 # Volk
 set(VOLK_BUILD_TESTS OFF CACHE BOOL "Disable tests")
 set(VOLK_BUILD_EXAMPLES OFF CACHE BOOL "Disable examples")
@@ -80,13 +76,6 @@ endif()
 option(MCVR_ENABLE_PROFILE_CONFIG "Enable the native profiler and CPU-sampling-friendly build flags" OFF)
 option(MCVR_ENABLE_PROFILER "Enable per-frame renderer profiler output" OFF)
 option(MCVR_ENABLE_CPU_PROFILE_FLAGS "Build native code with symbols and frame pointers for CPU profilers" OFF)
-set(MCVR_UI_BACKEND "OPENGL" CACHE STRING "UI backend to compile: OPENGL or VULKAN")
-string(TOUPPER "${MCVR_UI_BACKEND}" MCVR_UI_BACKEND)
-set_property(CACHE MCVR_UI_BACKEND PROPERTY STRINGS OPENGL VULKAN)
-if(NOT MCVR_UI_BACKEND STREQUAL "VULKAN" AND NOT MCVR_UI_BACKEND STREQUAL "OPENGL")
-    message(FATAL_ERROR "MCVR_UI_BACKEND must be VULKAN or OPENGL, got ${MCVR_UI_BACKEND}")
-endif()
-message(STATUS "MCVR UI backend: ${MCVR_UI_BACKEND}")
 if(MCVR_ENABLE_PROFILE_CONFIG)
     set(MCVR_ENABLE_PROFILER ON CACHE BOOL "Enable per-frame renderer profiler output" FORCE)
     set(MCVR_ENABLE_CPU_PROFILE_FLAGS ON CACHE BOOL "Build native code with symbols and frame pointers for CPU profilers" FORCE)

@@ -91,8 +91,9 @@ vec4 evaluateMoonBillboard(vec3 rayDir) {
     vec2 absDiskCoord = abs(diskCoord);
     if (absDiskCoord.x > tanHalf || absDiskCoord.y > tanHalf) { return vec4(0.0); }
     vec2 textureUv = diskCoord / tanHalf * 0.5 + 0.5;
-    uvec2 atlasTileCount = uvec2(4u, 2u);
-    uvec2 tile = uvec2(skyUBO.moonPhase % atlasTileCount.x, (skyUBO.moonPhase / atlasTileCount.x) % atlasTileCount.y);
+    // 26.3 has one texture per moon phase (the current phase's id is in moonTextureID), so the whole texture is the moon.
+    uvec2 atlasTileCount = uvec2(1u, 1u);
+    uvec2 tile = uvec2(0u, 0u);
     return sampleAtlasTileBaseLod(textures[nonuniformEXT(skyUBO.moonTextureID)], textureUv, atlasTileCount, tile);
 }
 

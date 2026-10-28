@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 std::ostream &swapchainCerr() {
@@ -51,7 +52,7 @@ VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR> &av
 }
 
 VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &surfaceCapabilities, uint32_t width, uint32_t height) {
-    if (surfaceCapabilities.currentExtent.width == -1) {
+    if (surfaceCapabilities.currentExtent.width == 0xFFFFFFFFu) {
         VkExtent2D swapChainExtent = {};
 
         swapChainExtent.width = std::min(std::max(width, surfaceCapabilities.minImageExtent.width),
@@ -64,31 +65,37 @@ VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &surfaceCapabilities,
     }
 }
 
-VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR> presentModes) {
-    if (Renderer::options.vsync) { return VK_PRESENT_MODE_FIFO_KHR; }
-
+VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR> presentModes, VkPresentModeKHR desired) {
     for (const auto &presentMode : presentModes) {
-        if (presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) { return presentMode; }
+        if (presentMode == desired) { return presentMode; }
     }
 
     return VK_PRESENT_MODE_FIFO_KHR;
 }
 
-void vk::Swapchain::reconstruct(bool recreateSurface) {
-    if (recreateSurface) {
-        swapchainImages_.clear();
-        if (swapchain_ != VK_NULL_HANDLE) {
-            vkDestroySwapchainKHR(device_->vkDevice(), swapchain_, nullptr);
-            swapchain_ = VK_NULL_HANDLE;
-        }
-        window_->reconstructSurface();
-    }
+void vk::Swapchain::setDesiredConfiguration(uint32_t width, uint32_t height, VkPresentModeKHR presentMode) {
+    desiredWidth_ = width;
+    desiredHeight_ = height;
+    desiredPresentMode_ = presentMode;
+}
 
+bool vk::Swapchain::matchesDesiredConfiguration() {
+    if (swapchain_ == VK_NULL_HANDLE) { return false; }
     VkSurfaceCapabilitiesKHR surfaceCapabilities;
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
                                                   &surfaceCapabilities) != VK_SUCCESS) {
-        swapchainCerr() << "failed to acquire presentation surface capabilities" << std::endl;
-        exit(EXIT_FAILURE);
+        return false;
+    }
+    VkExtent2D wanted = chooseSwapExtent(surfaceCapabilities, desiredWidth_ == 0 ? 854 : desiredWidth_,
+                                         desiredHeight_ == 0 ? 480 : desiredHeight_);
+    return wanted.width == extent_.width && wanted.height == extent_.height && desiredPresentMode_ == presentMode_;
+}
+
+void vk::Swapchain::reconstruct() {
+    VkSurfaceCapabilitiesKHR surfaceCapabilities;
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
+                                                  &surfaceCapabilities) != VK_SUCCESS) {
+        throw std::runtime_error("failed to acquire presentation surface capabilities");
     }
 
     maxExtent_ = surfaceCapabilities.maxImageExtent;
@@ -104,15 +111,13 @@ void vk::Swapchain::reconstruct(bool recreateSurface) {
     if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(), &formatCount,
                                              nullptr) != VK_SUCCESS ||
         formatCount == 0) {
-        swapchainCerr() << "failed to get number of supported surface formats" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to get number of supported surface formats");
     }
 
     std::vector<VkSurfaceFormatKHR> surfaceFormats(formatCount);
     if (vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(), &formatCount,
                                              surfaceFormats.data()) != VK_SUCCESS) {
-        swapchainCerr() << "failed to get supported surface formats" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to get supported surface formats");
     }
 
     surfaceFormat_ = chooseSurfaceFormat(surfaceFormats);
@@ -121,28 +126,20 @@ void vk::Swapchain::reconstruct(bool recreateSurface) {
     if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
                                                   &presentModeCount, nullptr) != VK_SUCCESS ||
         presentModeCount == 0) {
-        swapchainCerr() << "failed to get number of supported presentation modes" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to get number of supported presentation modes");
     }
 
     std::vector<VkPresentModeKHR> presentModes(presentModeCount);
     if (vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
                                                   &presentModeCount, presentModes.data()) != VK_SUCCESS) {
-        swapchainCerr() << "failed to get supported presentation modes" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to get supported presentation modes");
     }
 
-    presentMode_ = choosePresentMode(presentModes);
+    presentMode_ = choosePresentMode(presentModes, desiredPresentMode_);
 
-    int framebufferWidth = 0;
-    int framebufferHeight = 0;
-    GLFW_GetFramebufferSize(window_->window(), &framebufferWidth, &framebufferHeight);
-    if (framebufferWidth <= 0 || framebufferHeight <= 0) {
-        framebufferWidth = static_cast<int>(window_->width());
-        framebufferHeight = static_cast<int>(window_->height());
-    }
-    extent_ = chooseSwapExtent(surfaceCapabilities, static_cast<uint32_t>(framebufferWidth),
-                               static_cast<uint32_t>(framebufferHeight));
+    extent_ = chooseSwapExtent(surfaceCapabilities, desiredWidth_ == 0 ? 854 : desiredWidth_,
+                               desiredHeight_ == 0 ? 480 : desiredHeight_);
+    if (extent_.width == 0 || extent_.height == 0) { throw std::runtime_error("the surface has a zero-sized extent"); }
 
     VkSurfaceTransformFlagBitsKHR surfaceTransform;
     if (surfaceCapabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
@@ -185,15 +182,13 @@ void vk::Swapchain::reconstruct(bool recreateSurface) {
     uint32_t actualImageCount = 0;
     if (vkGetSwapchainImagesKHR(device_->vkDevice(), swapchain_, &actualImageCount, nullptr) != VK_SUCCESS ||
         actualImageCount == 0) {
-        swapchainCerr() << "failed to acquire number of swap chain images" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to acquire number of swap chain images");
     }
     imageCount_ = actualImageCount;
 
     std::vector<VkImage> images(actualImageCount);
     if (vkGetSwapchainImagesKHR(device_->vkDevice(), swapchain_, &actualImageCount, images.data()) != VK_SUCCESS) {
-        swapchainCerr() << "failed to acquire swap chain images" << std::endl;
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to acquire swap chain images");
     }
     for (int i = 0; i < actualImageCount; i++) {
         swapchainImages_.push_back(
@@ -224,6 +219,10 @@ VkExtent2D &vk::Swapchain::vkMinExtent() {
 
 VkSurfaceFormatKHR &vk::Swapchain::vkSurfaceFormat() {
     return surfaceFormat_;
+}
+
+VkPresentModeKHR vk::Swapchain::vkPresentMode() const {
+    return presentMode_;
 }
 
 std::vector<std::shared_ptr<vk::SwapchainImage>> &vk::Swapchain::swapchainImages() {

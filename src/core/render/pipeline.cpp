@@ -4,9 +4,6 @@
 #include "core/render/render_framework.hpp"
 #include "core/render/renderer.hpp"
 
-#ifdef MCVR_UI_BACKEND_VULKAN
-#    include "core/render/modules/ui_module.hpp"
-#endif
 #include "core/render/modules/world/dlss/dlss_rr_module.hpp"
 #include "core/render/modules/world/dlss/dlss_sr_module.hpp"
 #include "core/render/modules/world/fsr_upscaler/fsr_upscaler_module.hpp"
@@ -501,9 +498,6 @@ Pipeline::~Pipeline() {
 void Pipeline::init(std::shared_ptr<Framework> framework) {
     MCVR_PROFILE_SCOPE("native.Pipeline.init");
     framework_ = framework;
-#ifdef MCVR_UI_BACKEND_VULKAN
-    uiModule_ = UIModule::create(framework);
-#endif
     contexts_ = std::make_shared<std::vector<std::shared_ptr<PipelineContext>>>();
 
     uint32_t size = framework->swapchain()->imageCount();
@@ -541,19 +535,6 @@ void Pipeline::recreate(std::shared_ptr<Framework> framework) {
         recreationNeeded_.store(false, std::memory_order_release);
     }
     auto &frr = framework->frameResourceRetainer();
-#ifdef MCVR_UI_BACKEND_VULKAN
-    std::vector<OverlayDynamicDrawShaderInfo> overlayDynamicDrawShaders;
-    if (uiModule_ != nullptr) { overlayDynamicDrawShaders = uiModule_->overlayDynamicDrawShaders(); }
-
-    frr.retain(uiModule_);
-    uiModule_ = UIModule::create(framework);
-    for (const auto &shaderInfo : overlayDynamicDrawShaders) {
-        uiModule_->registerOverlayDrawShader(shaderInfo.key, shaderInfo.vertexFormatType, shaderInfo.drawMode,
-                                             shaderInfo.uniformSize, shaderInfo.vertexShaderPath,
-                                             shaderInfo.fragmentShaderPath, shaderInfo.definitions);
-    }
-#endif
-
     if (worldPipeline_ != nullptr)
         for (auto &module : worldPipeline_->worldModules()) { module->preClose(); }
     frr.retain(worldPipeline_);
@@ -592,16 +573,7 @@ void Pipeline::bindTexture(std::shared_ptr<vk::Sampler> sampler,
                            int index) {
     MCVR_PROFILE_SCOPE("native.Pipeline.bindTexture");
     if (worldPipeline_ != nullptr) worldPipeline_->bindTexture(sampler, image, index);
-#ifdef MCVR_UI_BACKEND_VULKAN
-    uiModule_->bindTexture(sampler, image, index);
-#endif
 }
-
-#ifdef MCVR_UI_BACKEND_VULKAN
-std::shared_ptr<UIModule> Pipeline::uiModule() {
-    return uiModule_;
-}
-#endif
 
 std::shared_ptr<WorldPipeline> Pipeline::worldPipeline() {
     return worldPipeline_;
@@ -618,127 +590,7 @@ bool Pipeline::isRecreationNeeded() const {
 
 PipelineContext::PipelineContext(std::shared_ptr<FrameworkContext> frameworkContext, std::shared_ptr<Pipeline> pipeline)
     : frameworkContext(frameworkContext),
-#ifdef MCVR_UI_BACKEND_VULKAN
-      uiModuleContext(pipeline->uiModule()->contexts()[frameworkContext->frameIndex]),
-#endif
       worldPipelineContext(pipeline->worldPipeline() == nullptr ?
                                nullptr :
                                pipeline->worldPipeline()->contexts()[frameworkContext->frameIndex]) {
 }
-
-#ifdef MCVR_UI_BACKEND_VULKAN
-void PipelineContext::fuseWorld() {
-    MCVR_PROFILE_SCOPE("native.PipelineContext.fuseWorld");
-    auto context = frameworkContext.lock();
-    auto framework = context->framework.lock();
-    if (!framework->isRunning()) return;
-
-    uiModuleContext->end();
-
-    auto mainQueueIndex = framework->physicalDevice()->mainQueueIndex();
-    auto overlayCommandBuffer = context->overlayCommandBuffer;
-    vk::CommandBuffer::ScopedDebugLabel debugLabel(*overlayCommandBuffer, "ui/fuse_world", 0.95f, 0.55f, 0.25f);
-
-    overlayCommandBuffer->barriersBufferImage(
-        {}, {
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-#    ifdef USE_AMD
-                    .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-#    else
-                    .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-#    endif
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = worldPipelineContext->outputImage,
-                    .subresourceRange = vk::wholeColorSubresourceRange,
-                },
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = uiModuleContext->overlayDrawColorImage->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = uiModuleContext->overlayDrawColorImage,
-                    .subresourceRange = vk::wholeColorSubresourceRange,
-                },
-            });
-
-    uiModuleContext->overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-
-    VkImageBlit imageBlit{};
-    imageBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    imageBlit.srcSubresource.mipLevel = 0;
-    imageBlit.srcSubresource.baseArrayLayer = 0;
-    imageBlit.srcSubresource.layerCount = 1;
-    imageBlit.srcOffsets[0] = {0, 0, 0};
-    imageBlit.srcOffsets[1] = {static_cast<int>(worldPipelineContext->outputImage->width()),
-                               static_cast<int>(worldPipelineContext->outputImage->height()), 1};
-    imageBlit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    imageBlit.dstSubresource.mipLevel = 0;
-    imageBlit.dstSubresource.baseArrayLayer = 0;
-    imageBlit.dstSubresource.layerCount = 1;
-    imageBlit.dstOffsets[0] = {0, 0, 0};
-    imageBlit.dstOffsets[1] = {static_cast<int>(uiModuleContext->overlayDrawColorImage->width()),
-                               static_cast<int>(uiModuleContext->overlayDrawColorImage->height()), 1};
-
-    vkCmdBlitImage(overlayCommandBuffer->vkCommandBuffer(), worldPipelineContext->outputImage->vkImage(),
-                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, uiModuleContext->overlayDrawColorImage->vkImage(),
-                   uiModuleContext->overlayDrawColorImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
-
-    overlayCommandBuffer->barriersBufferImage(
-        {}, {
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-#    ifdef USE_AMD
-                    .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-#    else
-                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-#    endif
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = worldPipelineContext->outputImage,
-                    .subresourceRange = vk::wholeColorSubresourceRange,
-                },
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = uiModuleContext->overlayDrawColorImage->imageLayout(),
-#    ifdef USE_AMD
-                    .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-#    else
-                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-#    endif
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = uiModuleContext->overlayDrawColorImage,
-                    .subresourceRange = vk::wholeColorSubresourceRange,
-                },
-            });
-
-#    ifdef USE_AMD
-    uiModuleContext->overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-#    else
-    uiModuleContext->overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-#    endif
-#    ifdef USE_AMD
-    worldPipelineContext->outputImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-#    else
-    worldPipelineContext->outputImage->imageLayout() = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-#    endif
-}
-#endif

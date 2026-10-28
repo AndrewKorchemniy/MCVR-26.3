@@ -4,12 +4,10 @@
 #include "core/render/buffers.hpp"
 #include "core/render/dlss_frame_generation.hpp"
 #include "core/render/fsr_frame_generation.hpp"
-#ifdef MCVR_UI_BACKEND_VULKAN
-#    include "core/render/modules/ui_module.hpp"
-#endif
 #include "core/render/modules/world/world_module.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/render_framework.hpp"
+#include "core/render/ui_composite.hpp"
 #include "core/render/renderer.hpp"
 
 #include <algorithm>
@@ -448,15 +446,10 @@ bool FrameGenerationManager::collectInputs(std::shared_ptr<FrameworkContext> con
     if (framework == nullptr || context == nullptr || framework->pipeline() == nullptr) { return false; }
 
     auto pipelineContext = framework->pipeline()->acquirePipelineContext(context);
-#ifdef MCVR_UI_BACKEND_VULKAN
-    if (pipelineContext == nullptr || pipelineContext->uiModuleContext == nullptr) { return false; }
+    if (pipelineContext == nullptr || framework->uiComposite() == nullptr) { return false; }
 
-    inputs.finalColor = pipelineContext->uiModuleContext->overlayDrawColorImage;
-#else
-    if (pipelineContext == nullptr) { return false; }
-
-    inputs.finalColor = framework->openGLUiSurface(context->frameIndex);
-#endif
+    // The world with Minecraft's UI composited over it.
+    inputs.finalColor = framework->uiComposite()->finalColor(context->frameIndex);
     if (!FrameGenerationHelper::validImage(inputs.finalColor)) { return false; }
 
     inputs.displayWidth = inputs.finalColor->width();

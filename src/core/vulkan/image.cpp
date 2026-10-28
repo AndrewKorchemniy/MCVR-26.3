@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <stdexcept>
 
 std::ostream &imageCerr() {
     return std::cerr << "[Image] ";
@@ -504,8 +505,57 @@ vk::DeviceLocalImage::DeviceLocalImage(std::shared_ptr<Device> device,
                        "vkCreateImageView(device-local image)");
 }
 
+vk::DeviceLocalImage::DeviceLocalImage(ExternalImage,
+                                       std::shared_ptr<Device> device,
+                                       std::shared_ptr<VMA> vma,
+                                       VkImage image,
+                                       uint32_t mipLevels,
+                                       uint32_t width,
+                                       uint32_t height,
+                                       uint32_t layer,
+                                       VkFormat format,
+                                       VkImageUsageFlags usage,
+                                       VkImageLayout layout)
+    : device_(device),
+      vma_(vma),
+      mipLevels_(mipLevels),
+      width_(width),
+      height_(height),
+      depth_(1),
+      layer_(layer),
+      format_(format),
+      persistStaging_(false),
+      external_(true),
+      usage_(usage),
+      allocationFlags_(0),
+      vmaUsage_(VMA_MEMORY_USAGE_AUTO),
+      imageLayout_(layout),
+      image_(image) {
+    if (image_ == VK_NULL_HANDLE) { throw std::invalid_argument("external image handle is null"); }
+    if (mipLevels_ == 0 || layer_ == 0) { throw std::invalid_argument("external image has no mip levels or layers"); }
+
+    VkImageViewCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    createInfo.image = image_;
+    createInfo.viewType = layer_ == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    createInfo.format = format_;
+    createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+    createInfo.subresourceRange = makeImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT, mipLevels_, 1, layer_);
+
+    vk::requireSuccess(vkCreateImageView(device_->vkDevice(), &createInfo, nullptr, &imageViews_[0]),
+                       "vkCreateImageView(external image)");
+}
+
+bool vk::DeviceLocalImage::isExternal() const {
+    return external_;
+}
+
 vk::DeviceLocalImage::~DeviceLocalImage() {
     for (int i = 0; i < imageViews_.size(); i++) { vkDestroyImageView(device_->vkDevice(), imageViews_[i], nullptr); }
+    if (external_) { return; }
     untrackVmaAllocation(vma_->allocator(), stagingAllocation_, memoryCategory_);
     untrackVmaAllocation(vma_->allocator(), allocation_, memoryCategory_);
     vmaDestroyBuffer(vma_->allocator(), stagingBuffer_, stagingAllocation_);

@@ -2429,8 +2429,10 @@ void Entities::queueBuild(EntitiesBuildTask task) {
 
                     switch (task.vertexFormats[geometryIndex + i]) {
                         case World::POSITION_COLOR_TEXTURE_LIGHT_NORMAL: {
-                            vk::VertexFormat::PositionColorTexLightNormal *vertices =
-                                static_cast<vk::VertexFormat::PositionColorTexLightNormal *>(
+                            // Vanilla's BLOCK format. 26.3 dropped its normal, so it is 28 bytes: position, color,
+                            // UV0 and the packed light.
+                            vk::VertexFormat::PositionColorTexLight *vertices =
+                                static_cast<vk::VertexFormat::PositionColorTexLight *>(
                                     task.vertices[geometryIndex + i]);
 
                             vertex.pos = vertices[j].position;
@@ -2440,8 +2442,6 @@ void Entities::queueBuild(EntitiesBuildTask task) {
                             vk::Vertex::setTexture(vertex, vertices[j].uv0);
 
                             vk::Vertex::setLight(vertex, vertices[j].uv2);
-
-                            vk::Vertex::setNormalBytes(vertex, vertices[j].normal);
 
                             break;
                         }
@@ -2719,51 +2719,9 @@ void Entities::queueBuild(EntitiesBuildTask task) {
                     }
                     break;
                 }
-                case World::DrawMode::LINE_STRIP: {
-                    std::vector<vk::VertexFormat::EntityPBRVertex> fixedVertices;
-                    if (vertexCount > 1) { fixedVertices.reserve((vertexCount - 1) * 2); }
-                    for (int j = 1; j < vertexCount; j++) {
-                        fixedVertices.push_back(geometryVertices[j - 1]);
-                        fixedVertices.push_back(geometryVertices[j]);
-                    }
-                    geometryVertices = fixedVertices;
-
-                    fixedVertices.clear();
-                    fixedVertices.reserve((geometryVertices.size() / 2) * 8);
-                    geometryIndices.reserve((geometryVertices.size() / 2) * 36);
-
-                    int accu = 0;
-                    for (int j = 1; j < geometryVertices.size(); j += 2) {
-                        auto [success, cubePoints] = cubeCornersFromFaceCenters(
-                            geometryVertices[j - 1].pos, geometryVertices[j].pos, task.lineWidth);
-
-                        if (!success) { continue; }
-
-                        for (int k = 0; k < 8; k++) {
-                            vk::VertexFormat::EntityPBRVertex lineVertex{};
-                            lineVertex.pos = cubePoints[k];
-                            lineVertex.packedData = vk::Vertex::useColorLayerBit;
-                            lineVertex.colorRGBA8 =
-                                k < 4 ? geometryVertices[j - 1].colorRGBA8 : geometryVertices[j].colorRGBA8;
-                            fixedVertices.push_back(lineVertex);
-                        }
-
-                        for (uint32_t index : EntityResourceHelpers::boxIndexPattern) {
-                            geometryIndices.push_back(accu + index);
-                        }
-                        accu += 8;
-                    }
-
-                    geometryVertices = fixedVertices;
-
-                    for (int j = 0; j < geometryVertices.size(); j++) {
-                        if (task.normalOffset) { vk::Vertex::applyNormalOffset(geometryVertices[j + 0]); }
-
-                        vk::Vertex::setCoordinate(geometryVertices[j + 0], coordinate);
-
-                        if (isPostRender) { vk::Vertex::setPostBase(geometryVertices[j + 0], x, y, z); }
-                    }
-
+                case World::DrawMode::POINTS: {
+                    // Points have no area to trace against; nothing is added for them.
+                    geometryVertices.clear();
                     break;
                 }
                 case World::DrawMode::LINES: {

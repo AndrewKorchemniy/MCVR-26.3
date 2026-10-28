@@ -15,16 +15,8 @@ std::shared_ptr<T> Renderer::createWithMemoryTag(const std::string &tag, Args &&
 std::filesystem::path Renderer::folderPath{};
 Options Renderer::options{};
 
-Renderer::Renderer(GLFWwindow *window)
-    : framework_(createWithMemoryTag<Framework>("framework", window)),
-      textures_(createWithMemoryTag<Textures>("textures", framework_)),
-      buffers_(createWithMemoryTag<Buffers>("buffers", framework_)),
-      world_(createWithMemoryTag<World>("world", framework_)) {}
-
-Renderer::Renderer(std::shared_ptr<vk::PresentationTarget> presentationTarget,
-                   vk::OpenGLDeviceIdentity openGLDeviceIdentity)
-    : framework_(
-          createWithMemoryTag<Framework>("framework", std::move(presentationTarget), std::move(openGLDeviceIdentity))),
+Renderer::Renderer(VulkanHandles handles)
+    : framework_(createWithMemoryTag<Framework>("framework", std::move(handles))),
       textures_(createWithMemoryTag<Textures>("textures", framework_)),
       buffers_(createWithMemoryTag<Buffers>("buffers", framework_)),
       world_(createWithMemoryTag<World>("world", framework_)) {}

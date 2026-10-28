@@ -18,6 +18,10 @@
 
 #ifdef _WIN32
 #    include <windows.h>
+// winnt.h defines MemoryBarrier as a macro, which clashes with vk::CommandBuffer::MemoryBarrier.
+#    ifdef MemoryBarrier
+#        undef MemoryBarrier
+#    endif
 #elif defined(__linux__)
 #    include <sys/resource.h>
 #    include <sys/syscall.h>

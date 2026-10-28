@@ -53,6 +53,13 @@ class Textures : public SharedObject<Textures> {
     void resetFrame();
     uint32_t allocateTexture();
     void initializeTexture(uint32_t id, uint32_t maxLevel, uint32_t width, uint32_t height, VkFormat format);
+    void importVulkanImage(uint32_t id,
+                           VkImage image,
+                           VkFormat format,
+                           uint32_t width,
+                           uint32_t height,
+                           uint32_t mipLevels,
+                           uint32_t layers);
     void releaseTexture(uint32_t id);
     void queueTextureClear(uint32_t id, const VkClearColorValue &clearColor);
     void setSamplingMode(uint32_t id, VkFilter samplingMode, VkSamplerMipmapMode mipmapMode);

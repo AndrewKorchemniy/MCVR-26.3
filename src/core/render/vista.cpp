@@ -420,7 +420,8 @@ bool Vista::queueVistaBuild(VistaBuildTask task) {
     for (const auto &pending : pending_) {
         if (pending.id == task.id) { return true; }
     }
-    if (pendingBytes_ + bytes > 128 * 1024 * 1024) { return false; }
+    // A Voxy section can carry 262,144 quads (about 40 MiB of vertices), and thousands of sections are queued.
+    if (pendingBytes_ + bytes > 256 * 1024 * 1024) { return false; }
     pendingBytes_ += bytes;
     pending_.push_back(std::move(task));
     return true;

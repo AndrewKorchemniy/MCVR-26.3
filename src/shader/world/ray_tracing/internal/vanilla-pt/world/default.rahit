@@ -39,6 +39,7 @@ indexBuffer;
 
 #include "util/vertex.glsl"
 #include "util/vista.glsl"
+#include "util/vista_material.glsl"
 
 layout(location = 0) rayPayloadInEXT MainRay mainRay;
 hitAttributeEXT vec2 attribs;
@@ -78,6 +79,12 @@ void main() {
         lod = lodWithCone(textures[nonuniformEXT(textureID)], uv, coneRadiusWorld, dposdu, dposdv);
 
         alpha *= resolveSurfaceTextureColor(sampleTexture(textures[nonuniformEXT(textureID)], uv, lod, false), alphaMode).a;
+    }
+
+    if (hasVistaMaterial(m0) && !hasWaterMaterial(m0) && ubo.vistaTextureID != 0u) {
+        // The tile alpha is the cut-out mask for Vista geometry.
+        vec2 vistaUv = baryCoords.x * m0.textureUV + baryCoords.y * m1.textureUV + baryCoords.z * m2.textureUV;
+        alpha *= vistaAlpha(textures[nonuniformEXT(ubo.vistaTextureID)], m0, vistaUv, 0.0);
     }
 
     alpha = resolveSurfaceAlpha(alpha, alphaMode);

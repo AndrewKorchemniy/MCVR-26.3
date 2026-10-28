@@ -209,8 +209,12 @@ bool decodeSurfaceMaterial(HitPayload hit,
     if (hasVistaMaterial(m0) && !isWater && worldUBO.vistaTextureID != 0u) {
         vec2 vistaUv = geometry.bary.x * m0.textureUV + geometry.bary.y * m1.textureUV +
             geometry.bary.z * m2.textureUV;
-        tint = vistaAlbedo(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, tint,
-            surfaceFootprint(coneWidthAtHit, geometry, rayDirection));
+        float vistaFootprint = surfaceFootprint(coneWidthAtHit, geometry, rayDirection);
+        tint = vistaAlbedo(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, tint, vistaFootprint);
+        surfaceAlpha = resolveSurfaceOpacity(
+            albedoSample.a * colorLayer.a *
+                vistaAlpha(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, vistaFootprint),
+            alphaMode);
     }
     if (shouldUseOverlay) {
         vec4 overlay =

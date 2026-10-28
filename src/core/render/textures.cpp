@@ -177,9 +177,8 @@ uint32_t Textures::allocateTexture() {
     std::scoped_lock lck(mtx_, framework->recreateMtx());
     ensureRunning();
 
-#ifdef MCVR_UI_BACKEND_OPENGL
+    // Ids of images imported from vanilla are chosen by Java, so skip any that are already taken.
     while (textures_.contains(nextID)) { nextID++; }
-#endif
     if (nextID >= 4096) {
         throw std::runtime_error("Texture descriptor capacity exhausted (4096)");
     }
@@ -215,15 +214,9 @@ void Textures::initializeTexture(uint32_t id, uint32_t maxLevel, uint32_t width,
 
     auto textureIter = textures_.find(id);
     if (textureIter == textures_.end()) {
-#ifdef MCVR_UI_BACKEND_OPENGL
-        if (id >= 4096) {
-            throw std::runtime_error("OpenGL texture id exceeds native descriptor capacity (4096)");
-        }
+        if (id >= 4096) { throw std::runtime_error("Texture id exceeds native descriptor capacity (4096)"); }
         textures_.emplace(std::make_pair(id, nullptr));
         samplers.emplace(std::make_pair(id, nullptr));
-#else
-        throw std::runtime_error("The given texture id is not allocated for texture");
-#endif
     }
 
     framework->frameResourceRetainer().retain(textures_[id]);
@@ -250,6 +243,50 @@ void Textures::initializeTexture(uint32_t id, uint32_t maxLevel, uint32_t width,
         if (fallbackId == id) {
             framework->pipeline()->bindTexture(samplers[id], textures_[id], releasedId);
         }
+    }
+}
+
+void Textures::importVulkanImage(uint32_t id,
+                                 VkImage image,
+                                 VkFormat format,
+                                 uint32_t width,
+                                 uint32_t height,
+                                 uint32_t mipLevels,
+                                 uint32_t layers) {
+    MCVR_PROFILE_SCOPE("native.Textures.importVulkanImage");
+    auto framework = frameworkOrThrow();
+    auto device = framework->device();
+    auto vma = framework->vma();
+
+    std::scoped_lock lck(mtx_, framework->recreateMtx());
+    ensureRunning();
+    if (id >= 4096) { throw std::runtime_error("Texture id exceeds native descriptor capacity (4096)"); }
+    if (image == VK_NULL_HANDLE || width == 0 || height == 0 || mipLevels == 0 || layers == 0) {
+        throw std::runtime_error("Imported image has no handle or empty dimensions");
+    }
+
+    submitDeferredUploadsLocked();
+    if (queuedTextureClears_.contains(id)) { flushQueuedUploads(UploadFlushReason::TextureReinitialize); }
+
+    if (textures_.find(id) == textures_.end()) {
+        textures_.emplace(std::make_pair(id, nullptr));
+        samplers.emplace(std::make_pair(id, nullptr));
+    }
+
+    // Vanilla owns the image's memory and keeps it in VK_IMAGE_LAYOUT_GENERAL, so the wrapper only holds views.
+    framework->frameResourceRetainer().retain(textures_[id]);
+    textures_[id] = vk::DeviceLocalImage::create(vk::DeviceLocalImage::ExternalImage{}, device, vma, image, mipLevels,
+                                                 width, height, layers, format, VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                 VK_IMAGE_LAYOUT_GENERAL);
+
+    framework->frameResourceRetainer().retain(samplers[id]);
+    samplers[id] =
+        getOrCreateSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_REPEAT);
+
+    framework->pipeline()->bindTexture(samplers[id], textures_[id], id);
+    releasedTextureFallbackIds_.erase(id);
+    for (const auto &[releasedId, fallbackId] : releasedTextureFallbackIds_) {
+        if (fallbackId == id) { framework->pipeline()->bindTexture(samplers[id], textures_[id], releasedId); }
     }
 }
 

@@ -206,6 +206,10 @@ bool decodeSurface(
         float footprint = max(hit.coneWidth + hit.hitT * hit.coneSpread, 0.0) /
             max(abs(dot(geometryNormal, rayDirection)), 0.05);
         tint = vistaAlbedo(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, tint, footprint);
+        surfaceAlpha = resolveSurfaceOpacity(
+            albedoSample.a * colorLayer.a *
+                vistaAlpha(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, footprint),
+            alphaMode);
     }
     if (usesSurfaceMaterial && shouldUseOverlay) {
         vec4 overlay =

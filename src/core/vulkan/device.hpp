@@ -4,17 +4,22 @@
 
 #include <mutex>
 #include <filesystem>
+#include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace vk {
 class Instance;
-class Window;
 class PhysicalDevice;
 
+// Non-owning wrapper around the VkDevice vanilla created with Radiance's features enabled. The queues are vanilla's;
+// the graphics queue may only be used from the render thread.
 class Device : public SharedObject<Device> {
   public:
     Device(std::shared_ptr<Instance> instance,
-           std::shared_ptr<Window> window,
-           std::shared_ptr<PhysicalDevice> physicalDevice);
+           std::shared_ptr<PhysicalDevice> physicalDevice,
+           VkDevice device,
+           const std::vector<std::string> &enabledExtensions);
     ~Device();
 
     VkDevice &vkDevice();
@@ -32,6 +37,7 @@ class Device : public SharedObject<Device> {
     std::recursive_mutex &secondaryQueueMutex();
     std::recursive_mutex &asyncComputeQueueMutex();
 
+    bool hasEnabledExtension(const char *name) const;
     bool hasExtendedDynamicState2LogicOp() const;
     bool hasMultiDrawIndirect() const;
     bool hasDrawIndirectFirstInstance() const;
@@ -46,13 +52,13 @@ class Device : public SharedObject<Device> {
 
   private:
     std::shared_ptr<Instance> instance_;
-    std::shared_ptr<Window> window_;
     std::shared_ptr<PhysicalDevice> physicalDevice_;
 
     VkDevice device_ = VK_NULL_HANDLE;
     VkPipelineCache pipelineCache_ = VK_NULL_HANDLE;
     std::filesystem::path pipelineCachePath_;
     void initPipelineCache();
+    std::unordered_set<std::string> enabledExtensions_;
     VkQueue mainQueue_ = VK_NULL_HANDLE;
     VkQueue presentQueue_ = VK_NULL_HANDLE;
     VkQueue secondaryQueue_ = VK_NULL_HANDLE;

@@ -1,12 +1,12 @@
 # Minecraft Vulkan Renderer
 
-MCVR is the C++ renderer used by [Radiance](https://github.com/Minecraft-Radiance/Radiance). It provides Vulkan world rendering, hardware ray tracing, reconstruction, and frame generation. Use the **0.1.6** renderer with the matching Radiance Java source branch.
+MCVR is the C++ renderer used by [Radiance](https://github.com/Minecraft-Radiance/Radiance). It provides Vulkan world rendering, hardware ray tracing, reconstruction, and frame generation. This branch (`port/26.3`) targets Minecraft 26.3 and the matching Radiance Java port.
 
-The default UI backend is **OpenGL**. Minecraft draws its menus and HUD through OpenGL, and MCVR composites them with the Vulkan world renderer. Both APIs must use the same GPU. Player installation instructions, GPU selection guidance, and the FAQ are in the [Radiance README](https://github.com/Minecraft-Radiance/Radiance).
+On Minecraft 26.3 the game itself runs on Vulkan. MCVR does not create an instance, device, surface or window: Radiance hands it the `VkInstance`, `VkPhysicalDevice`, `VkDevice`, queues and `VkSurfaceKHR` Minecraft created (`RendererProxy.initRendererWithVulkanDevice`), and MCVR adopts them. Minecraft keeps drawing the menus, HUD and hand into its main color target; MCVR renders the ray-traced world in its own submission, composites that target over it, and presents through its own swapchain on Minecraft's surface so frame generation, vsync and the frame limiter keep working. Player installation instructions, GPU selection guidance, and the FAQ are in the [Radiance README](https://github.com/Minecraft-Radiance/Radiance).
 
 ## Build
 
-Prepare a C++23 compiler, CMake, a JDK matching the Java checkout, and Vulkan SDK shader tools with `glslangValidator` on `PATH`. Linux also needs the development packages required by GLFW and X11. The Windows release is built with Visual Studio 2022 / MSVC on x64.
+Prepare a C++23 compiler, CMake, a JDK matching the Java checkout, and Vulkan SDK shader tools with `glslangValidator` on `PATH`. The Windows release is built with Visual Studio 2022 / MSVC on x64. shaderc (headers and libraries) must be found through `VULKAN_SDK` or `SHADERC_INCLUDE_DIR` / `SHADERC_LIBRARY_RELEASE`.
 
 Initialize the pinned dependencies:
 
@@ -19,7 +19,7 @@ Use the submodule commits recorded by this release, including the NRD and Fideli
 Before configuring MCVR, run the following in the selected Radiance Java checkout to generate JNI headers:
 
 ```sh
-./gradlew compileJava -PradianceUiBackend=opengl
+./gradlew compileJava
 ```
 
 On Windows, use `gradlew.bat`. Generate headers separately for each Minecraft version and loader.
@@ -29,14 +29,13 @@ On Windows, use `gradlew.bat`. Generate headers separately for each Minecraft ve
 Replace `/path/to/Radiance` with the absolute path to that Java checkout:
 
 ```sh
-cmake -S . -B build-linux-opengl \
+cmake -S . -B build-linux \
   -DCMAKE_BUILD_TYPE=Release \
   -DJAVA_PROJECT_ROOT_DIR=/path/to/Radiance \
-  -DMCVR_UI_BACKEND=OPENGL \
   -DMCVR_ENABLE_NRD=ON \
   -DUSE_AMD=ON
-cmake --build build-linux-opengl --parallel
-cmake --install build-linux-opengl
+cmake --build build-linux --parallel
+cmake --install build-linux
 ```
 
 ### Windows
@@ -44,27 +43,18 @@ cmake --install build-linux-opengl
 Run in a Visual Studio developer shell, replacing `C:/path/to/Radiance` with the Java checkout path:
 
 ```powershell
-cmake -S . -B build-windows-opengl -G "Visual Studio 17 2022" -A x64 -DJAVA_PROJECT_ROOT_DIR="C:/path/to/Radiance" -DMCVR_UI_BACKEND=OPENGL -DMCVR_ENABLE_NRD=ON -DUSE_AMD=ON
-cmake --build build-windows-opengl --config Release --parallel
-cmake --install build-windows-opengl --config Release
+cmake -S . -B build-windows -G "Visual Studio 17 2022" -A x64 -DJAVA_PROJECT_ROOT_DIR="C:/path/to/Radiance" -DMCVR_ENABLE_NRD=ON -DUSE_AMD=ON
+cmake --build build-windows --config Release --parallel
+cmake --install build-windows --config Release
 ```
 
 Installation writes the native library, shader resources, and built-in shader pack archives into the Java project's resources. Return to that checkout and run:
 
 ```sh
-./gradlew build -PradianceUiBackend=opengl
+./gradlew build
 ```
 
 The resulting mod JAR is under `build/libs/` in the Java checkout. Build each OS and Minecraft/loader combination with its corresponding native library and JNI headers.
-
-### UI backend selection
-
-| UI backend | MCVR / CMake | Radiance / Gradle |
-| --- | --- | --- |
-| OpenGL, default | `-DMCVR_UI_BACKEND=OPENGL` | `-PradianceUiBackend=opengl` |
-| Vulkan | `-DMCVR_UI_BACKEND=VULKAN` | `-PradianceUiBackend=vulkan` |
-
-This is a build option. Switching the in-game ray-tracing pipeline does not change the UI backend. Use separate native build directories and rebuild both components when changing it. The Java packaging tasks check that the native and Java UI variants match.
 
 ## Shader packs
 

@@ -13,6 +13,7 @@ class Textures;
 class Framework;
 class Buffers;
 class World;
+struct VulkanHandles;
 
 struct Options {
     uint32_t maxFps = 1e6;
@@ -51,9 +52,7 @@ class Renderer : public Singleton<Renderer> {
     void close();
 
   private:
-    Renderer(GLFWwindow *window);
-    Renderer(std::shared_ptr<vk::PresentationTarget> presentationTarget,
-             vk::OpenGLDeviceIdentity openGLDeviceIdentity);
+    Renderer(VulkanHandles handles);
 
     template <typename T, typename... Args>
     static std::shared_ptr<T> createWithMemoryTag(const std::string &tag, Args &&...args);

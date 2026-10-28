@@ -5,9 +5,6 @@
 #include "core/all_extern.hpp"
 #include "core/render/frame_generation.hpp"
 #include "core/render/modules/world/dlss/dlss_wrapper.hpp"
-#ifdef MCVR_UI_BACKEND_OPENGL
-#    include "core/render/opengl_ui/opengl_ui_surface.hpp"
-#endif
 #include "core/render/pipeline.hpp"
 #include "core/vulkan/all_core_vulkan.hpp"
 
@@ -17,18 +14,14 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <queue>
+#include <string>
+#include <vector>
 
 class Framework;
-#ifdef MCVR_UI_BACKEND_VULKAN
-class UIModule;
-struct UIModuleContext;
-#endif
+class UiComposite;
 namespace mcvr {
 class FrameGenerationManager;
-#ifdef MCVR_UI_BACKEND_OPENGL
-class OpenGLUiSurface;
-struct OpenGLUiSurfaceExport;
-#endif
 }
 
 class FrameResourceRetainer : public SharedObject<FrameResourceRetainer> {
@@ -56,6 +49,17 @@ class FrameResourceRetainer : public SharedObject<FrameResourceRetainer> {
     std::recursive_mutex mtx_;
 };
 
+// The Vulkan handles Minecraft created and Radiance adopts instead of creating its own.
+struct VulkanHandles {
+    VkInstance instance = VK_NULL_HANDLE;
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    vk::AdoptedQueues queues;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    std::vector<std::string> enabledInstanceExtensions;
+    std::vector<std::string> enabledDeviceExtensions;
+};
+
 struct FrameworkContext : public SharedObject<FrameworkContext> {
     struct AsyncWorldBranch {
         std::shared_ptr<vk::CommandBuffer> commandBuffer;
@@ -81,8 +85,10 @@ struct FrameworkContext : public SharedObject<FrameworkContext> {
     std::shared_ptr<vk::Fence> commandFinishedFence;
 
     std::shared_ptr<vk::CommandBuffer> uploadCommandBuffer;
+    // Composites the UI surface over the world.
     std::shared_ptr<vk::CommandBuffer> overlayCommandBuffer;
     std::shared_ptr<vk::CommandBuffer> worldCommandBuffer;
+    // Frame generation and the final copy to the swapchain image.
     std::shared_ptr<vk::CommandBuffer> fuseCommandBuffer;
     std::vector<AsyncWorldBranch> asyncWorldBranches;
 
@@ -94,9 +100,7 @@ struct FrameworkContext : public SharedObject<FrameworkContext> {
     FrameworkContext(std::shared_ptr<Framework> framework, uint32_t frame_index);
     ~FrameworkContext();
 
-#ifdef MCVR_UI_BACKEND_VULKAN
     void fuseFinal();
-#endif
 };
 
 class Framework : public SharedObject<Framework> {
@@ -107,22 +111,18 @@ class Framework : public SharedObject<Framework> {
     Framework();
     ~Framework();
 
-    void init(GLFWwindow *window);
-    void init(std::shared_ptr<vk::PresentationTarget> presentationTarget,
-              vk::OpenGLDeviceIdentity openGLDeviceIdentity);
-    void acquireContext();
+    // Adopts Minecraft's instance, device, queues and surface and creates the swapchain on that surface.
+    void init(VulkanHandles handles);
+    // presentMode is the ordinal of IMMEDIATE, MAILBOX, FIFO, FIFO_RELAXED. Returns false if the swapchain could not
+    // be created.
+    bool configureSwapchain(uint32_t width, uint32_t height, uint32_t presentMode);
+    bool isSwapchainSuboptimal();
+    // Returns false if no swapchain image could be acquired.
+    bool acquireContext();
+    // The image Minecraft drew its UI into this frame. Not owned and consumed by the next submitCommand().
+    void setPresentSource(VkImage image, VkImageView imageView, uint32_t width, uint32_t height);
     void submitCommand();
     void present();
-#ifdef MCVR_UI_BACKEND_OPENGL
-    std::shared_ptr<mcvr::OpenGLUiSurface> prepareOpenGLUiFrame();
-    mcvr::OpenGLUiSurfaceExport exportOpenGLUiSurface(uint32_t frameIndex);
-    std::shared_ptr<mcvr::OpenGLUiSurface> openGLUiSurface(uint32_t frameIndex);
-    void submitOpenGLUiFrame();
-    bool hasOpenGLUiResizePending() const;
-    bool hasOpenGLUiFrame() const;
-    bool prepareOpenGLUiResize();
-    void completeOpenGLUiResize();
-#endif
     void recreate();
     void waitDeviceIdle();
     void waitRenderQueueIdle();
@@ -130,8 +130,6 @@ class Framework : public SharedObject<Framework> {
     void close();
     bool isRunning();
     uint32_t presentedFrameRate() const;
-
-    void takeScreenshot(bool withUI, int width, int height, int channel, void *dstPointer);
 
     std::recursive_mutex &recreateMtx();
 
@@ -143,6 +141,7 @@ class Framework : public SharedObject<Framework> {
     std::shared_ptr<vk::Swapchain> swapchain();
     std::shared_ptr<vk::CommandPool> mainCommandPool();
     std::shared_ptr<vk::CommandPool> asyncCommandPool();
+    std::shared_ptr<UiComposite> uiComposite();
 
     std::shared_ptr<vk::CommandBuffer> worldAsyncCommandBuffer();
 
@@ -156,15 +155,15 @@ class Framework : public SharedObject<Framework> {
     FrameResourceRetainer &frameResourceRetainer();
 
   private:
-    void init(std::shared_ptr<vk::PresentationTarget> presentationTarget,
-              std::optional<vk::OpenGLDeviceIdentity> openGLDeviceIdentity);
-
     struct AdditionalPresentAcquire {
         uint32_t acquireSlot = 0;
         uint32_t imageIndex = 0;
         std::shared_ptr<vk::Semaphore> semaphore;
     };
 
+    bool acquireContextLocked(bool recreateWhenOutOfDate);
+    void createFrameResources();
+    void clearFrameResources();
     std::shared_ptr<vk::Semaphore> acquireSemaphore();
     void recycleSemaphore(std::shared_ptr<vk::Semaphore> semaphore);
     void waitPresentCopyFences(uint32_t imageIndex);
@@ -172,8 +171,7 @@ class Framework : public SharedObject<Framework> {
     void retireSemaphores(std::vector<std::shared_ptr<vk::Semaphore>> &semaphores);
     void retireQueuedSemaphores(std::queue<std::shared_ptr<vk::Semaphore>> &semaphores);
     void retireContextImageAcquiredSemaphores();
-    bool presentSwapchainImage(uint32_t imageIndex, VkSemaphore waitSemaphore, bool overlapNextFrame = false);
-    void finishPendingPresent();
+    bool presentSwapchainImage(uint32_t imageIndex, VkSemaphore waitSemaphore);
     void recordPresentedFrame();
     bool acquireAdditionalPresentImage(uint32_t presentSlot, AdditionalPresentAcquire &acquire);
     void discardAdditionalPresentAcquire(uint32_t acquireSlot);
@@ -187,16 +185,6 @@ class Framework : public SharedObject<Framework> {
     uint32_t effectiveFrameRateLimit() const;
     void limitFrameRate();
     void submitFrameCommandBuffers(VkSemaphore signalSemaphore);
-#ifdef MCVR_UI_BACKEND_OPENGL
-    void initOpenGLUiSurfaces();
-    void clearOpenGLUiSurfaces();
-    void releaseRetiredOpenGLUiSurfaces();
-    void requestOpenGLUiResize();
-    bool submitOpenGLUiPostFrameCommands(std::shared_ptr<vk::CommandBuffer> commandBuffer,
-                                         std::shared_ptr<vk::Fence> fence,
-                                         VkSemaphore waitSemaphore,
-                                         VkSemaphore signalSemaphore);
-#endif
 
   private:
     std::shared_ptr<vk::Instance> instance_;
@@ -213,12 +201,10 @@ class Framework : public SharedObject<Framework> {
     std::vector<std::shared_ptr<vk::CommandBuffer>> worldCommandBuffers_;
     std::vector<std::shared_ptr<vk::CommandBuffer>> fuseCommandBuffers_;
     std::vector<std::shared_ptr<vk::CommandBuffer>> presentCopyCommandBuffers_;
-#ifdef MCVR_UI_BACKEND_OPENGL
-    std::vector<std::shared_ptr<vk::CommandBuffer>> openGLUiPostFrameCommandBuffers_;
-#endif
     std::shared_ptr<vk::CommandBuffer> worldAsyncCommandBuffer_;
 
     std::shared_ptr<Pipeline> pipeline_;
+    std::shared_ptr<UiComposite> uiComposite_;
 
     std::vector<std::shared_ptr<vk::Semaphore>> commandProcessedSemaphores_;
     std::vector<std::shared_ptr<vk::Semaphore>> presentCopyProcessedSemaphores_;
@@ -226,24 +212,19 @@ class Framework : public SharedObject<Framework> {
     std::vector<std::shared_ptr<vk::Semaphore>> retiredSemaphores_;
     std::vector<std::shared_ptr<vk::Fence>> commandFinishedFences_;
     std::vector<std::shared_ptr<vk::Fence>> presentCopyFinishedFences_;
-#ifdef MCVR_UI_BACKEND_OPENGL
-    std::vector<std::shared_ptr<vk::Fence>> openGLUiPostFrameFinishedFences_;
-#endif
     std::vector<std::shared_ptr<vk::Fence>> additionalPresentImageAcquireWaitFences_;
 
     std::vector<std::shared_ptr<FrameworkContext>> contexts_;
 
     std::shared_ptr<FrameworkContext> currentContext_ = nullptr;
     uint32_t currentContextIndex_ = 0;
-    std::queue<uint32_t> indexHistory_;
 
     std::queue<std::shared_ptr<vk::Semaphore>> recycledImageAcquiredSemaphores_;
-    std::future<VkResult> pendingPresent_;
-    std::shared_ptr<vk::Semaphore> prefetchedImageSemaphore_;
-    uint32_t prefetchedImageIndex_ = 0;
     std::recursive_mutex recreateMtx_;
 
     bool running_ = true;
+    // Set when vkAcquireNextImageKHR or vkQueuePresentKHR reports that the swapchain no longer matches the surface.
+    std::atomic<bool> swapchainSuboptimal_{false};
     std::chrono::steady_clock::time_point presentedFrameSampleStart_{};
     uint32_t presentedFrameSampleCount_ = 0;
     std::atomic<uint32_t> presentedFrameRate_{0};
@@ -252,12 +233,6 @@ class Framework : public SharedObject<Framework> {
 
     std::shared_ptr<FrameResourceRetainer> frameResourceRetainer_;
     std::shared_ptr<mcvr::FrameGenerationManager> frameGenerationManager_;
-#ifdef MCVR_UI_BACKEND_OPENGL
-    std::vector<std::shared_ptr<mcvr::OpenGLUiSurface>> openGLUiSurfaces_;
-    std::vector<std::shared_ptr<mcvr::OpenGLUiSurface>> retiredOpenGLUiSurfaces_;
-    uint32_t openGLUiSurfaceGeneration_ = 1;
-    bool openGLUiResizePending_ = false;
-#endif
 };
 
 template <typename T>

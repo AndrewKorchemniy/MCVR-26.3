@@ -1,0 +1,31 @@
+#version 450
+
+// Composites Minecraft's UI surface over the ray-traced world.
+//
+// The UI surface is Minecraft's main color target: cleared to transparent black, then the GUI, hand and screen
+// effects are blended on top with SRC_ALPHA / ONE_MINUS_SRC_ALPHA. Blending over a transparent background leaves the
+// color premultiplied by coverage and the alpha holding the coverage, so the "over" operator below does not multiply
+// by alpha again. Set UI_PREMULTIPLIED to 0 if the surface ever holds straight (unpremultiplied) color.
+#define UI_PREMULTIPLIED 1
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) uniform image2D finalColor;
+layout(binding = 1) uniform sampler2D uiColor;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(finalColor);
+    if (pixel.x >= size.x || pixel.y >= size.y) { return; }
+
+    vec4 ui = texelFetch(uiColor, pixel, 0);
+    vec4 world = imageLoad(finalColor, pixel);
+
+#if UI_PREMULTIPLIED
+    vec3 color = ui.rgb + world.rgb * (1.0 - ui.a);
+#else
+    vec3 color = mix(world.rgb, ui.rgb, ui.a);
+#endif
+
+    imageStore(finalColor, pixel, vec4(color, 1.0));
+}

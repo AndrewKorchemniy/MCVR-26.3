@@ -75,8 +75,9 @@ vec4 evalMoonBillboard(vec3 rayDir) {
     vec2 a = abs(q);
     if (a.x > tanHalf || a.y > tanHalf) return vec4(0.0);
     vec2 uv = q / tanHalf * 0.5 + 0.5;
-    uvec2 tileCount = uvec2(4u, 2u);
-    uvec2 tile = uvec2(skyUBO.moonPhase % tileCount.x, (skyUBO.moonPhase / tileCount.x) % tileCount.y);
+    // 26.3 has one texture per moon phase (the current phase's id is in moonTextureID), so the whole texture is the moon.
+    uvec2 tileCount = uvec2(1u, 1u);
+    uvec2 tile = uvec2(0u, 0u);
     return sampleCelestialAtlasTextureLod0(textures[nonuniformEXT(skyUBO.moonTextureID)], uv, tileCount, tile);
 }
 

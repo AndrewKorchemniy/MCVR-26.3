@@ -102,6 +102,23 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_TextureProxy_prepar
     });
 }
 
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_TextureProxy_importVulkanImageNative(
+    JNIEnv *env, jclass, jint id, jlong vkImage, jint format, jint width, jint height, jint mipLevels, jint layers) {
+    MCVR_PROFILE_SCOPE("jni.TextureProxy.importVulkanImage");
+    invokeTextureJni(env, [&] {
+        requireTextureId(id);
+        if (vkImage == 0 || width <= 0 || height <= 0 || mipLevels <= 0 || layers <= 0) {
+            throw std::invalid_argument("Imported image handle, dimensions, mip level count and layers are required");
+        }
+        auto textures = currentTextures();
+        if (textures == nullptr) return;
+        textures->importVulkanImage(static_cast<uint32_t>(id), reinterpret_cast<VkImage>(static_cast<uintptr_t>(vkImage)),
+                                    static_cast<VkFormat>(format), static_cast<uint32_t>(width),
+                                    static_cast<uint32_t>(height), static_cast<uint32_t>(mipLevels),
+                                    static_cast<uint32_t>(layers));
+    });
+}
+
 JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_TextureProxy_releaseTextureNative(JNIEnv *env,
                                                                                                jclass,
                                                                                                jint id) {

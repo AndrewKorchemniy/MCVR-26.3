@@ -218,7 +218,23 @@ class DeviceLocalImage : public Image, public SharedObject<DeviceLocalImage> {
                      std::string debugName = ""
 #endif
     );
+    // Wraps an image owned by someone else (vanilla). The image is never freed, never transitioned by this class and
+    // is assumed to be in `layout`; only the image views created here are destroyed.
+    struct ExternalImage {};
+    DeviceLocalImage(ExternalImage,
+                     std::shared_ptr<Device> device,
+                     std::shared_ptr<VMA> vma,
+                     VkImage image,
+                     uint32_t mipLevels,
+                     uint32_t width,
+                     uint32_t height,
+                     uint32_t layer,
+                     VkFormat format,
+                     VkImageUsageFlags usage,
+                     VkImageLayout layout);
     ~DeviceLocalImage();
+
+    bool isExternal() const;
 
     void uploadToStagingBuffer(void *src);
     void uploadToImage(VkCommandBuffer cmdBuffer);
@@ -259,7 +275,8 @@ class DeviceLocalImage : public Image, public SharedObject<DeviceLocalImage> {
     uint32_t depth_;
     uint32_t layer_;
     VkFormat format_;
-    bool persistStaging_;
+    bool persistStaging_ = false;
+    bool external_ = false;
     VkImageUsageFlags usage_;
     VmaAllocationCreateFlags allocationFlags_;
     VmaMemoryUsage vmaUsage_;

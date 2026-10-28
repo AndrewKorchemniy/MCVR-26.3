@@ -98,14 +98,6 @@ namespace VertexFormat {
         T_UINT color;
     };
 
-    struct PositionColorTexLightNormal {
-        T_VEC3 position;
-        T_UINT color;
-        T_VEC2 uv0;
-        T_UINT uv2;
-        T_UINT normal;
-    };
-
     struct PositionColorTexOverlayLightNormal {
         T_VEC3 position;
         T_UINT color;
@@ -247,15 +239,6 @@ namespace Data {
         DirectionalLight directionalLight;
         T_FLOAT time;
         T_UINT seed;
-    };
-
-    struct OverlayPostUBO {
-        T_MAT4 projectionMat;
-        T_VEC2 inSize;
-        T_VEC2 outSize;
-        T_VEC2 blurDir;
-        T_FLOAT radius;
-        T_FLOAT radiusMultiplier;
     };
 
     struct WorldUBO {

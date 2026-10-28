@@ -691,6 +691,9 @@ void main() {
             max(abs(dot(normal, gl_ObjectRayDirectionEXT)), 0.05);
         colorLayer = vistaAlbedo(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, colorLayer, footprint);
         colorLayerValue.rgb = colorLayer;
+        // The tile alpha is the cut-out mask for Vista geometry.
+        colorLayerValue.a *=
+            vistaAlpha(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, footprint);
     }
     uint bounce = rayBounce(mainRay);
 

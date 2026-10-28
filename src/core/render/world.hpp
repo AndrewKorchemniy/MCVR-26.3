@@ -52,15 +52,17 @@ class World : public SharedObject<World> {
         CAMERA_SHIFT,
     };
 
+    // Values match Java's Constants.DrawModes. 26.3 dropped LINE_STRIP, so value 1 is never sent but stays reserved.
     enum class DrawMode {
         LINES,
-        LINE_STRIP,
+        UNUSED_LINE_STRIP,
         DEBUG_LINES,
         DEBUG_LINE_STRIP,
         TRIANGLES,
         TRIANGLE_STRIP,
         TRIANGLE_FAN,
         QUADS,
+        POINTS,
     };
 
     World(std::shared_ptr<Framework> framework);

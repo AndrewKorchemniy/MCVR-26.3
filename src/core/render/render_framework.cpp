@@ -4,16 +4,11 @@
 #include "core/render/buffers.hpp"
 #include "core/render/chunks.hpp"
 #include "core/render/entities.hpp"
-#ifdef MCVR_UI_BACKEND_VULKAN
-#    include "core/render/modules/ui_module.hpp"
-#endif
-#ifdef MCVR_UI_BACKEND_OPENGL
-#    include "core/render/opengl_ui/opengl_ui_surface.hpp"
-#endif
 #include "core/profiler/profiler.hpp"
 #include "core/render/pipeline.hpp"
 #include "core/render/renderer.hpp"
 #include "core/render/textures.hpp"
+#include "core/render/ui_composite.hpp"
 #include "core/render/world.hpp"
 #include "core/vulkan/resource_memory_tracker.hpp"
 #include "core/vulkan/result.hpp"
@@ -21,6 +16,7 @@
 #include <cstdio>
 #include <exception>
 #include <mutex>
+#include <queue>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -102,7 +98,6 @@ void FrameworkContext::joinWorldAsyncBranch(size_t branchIndex) {
     branch.joinSegment = worldCommandBuffer->split() + 1;
 }
 
-#ifdef MCVR_UI_BACKEND_VULKAN
 void FrameworkContext::fuseFinal() {
     MCVR_PROFILE_SCOPE("native.FrameworkContext.fuseFinal");
     auto f = framework.lock();
@@ -112,20 +107,21 @@ void FrameworkContext::fuseFinal() {
     vk::CommandBuffer::ScopedDebugLabel debugLabel(*fuseCommandBuffer, "present/final_blit", 0.90f, 0.45f, 0.20f);
 
     auto mainQueueIndex = physicalDevice->mainQueueIndex();
-    auto pipelineContext = f->pipeline_->acquirePipelineContext(shared_from_this());
+    auto finalImage = f->uiComposite()->finalColor(frameIndex);
 
     fuseCommandBuffer->barriersBufferImage(
         {}, {
                 {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
                     .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                     .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout(),
+                    .oldLayout = finalImage->imageLayout(),
                     .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                     .srcQueueFamilyIndex = mainQueueIndex,
                     .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = pipelineContext->uiModuleContext->overlayDrawColorImage,
+                    .image = finalImage,
                     .subresourceRange = vk::wholeColorSubresourceRange,
                 },
                 {
@@ -142,7 +138,7 @@ void FrameworkContext::fuseFinal() {
                 },
             });
 
-    pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    finalImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     swapchainImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
     VkImageBlit imageBlit{};
@@ -151,8 +147,7 @@ void FrameworkContext::fuseFinal() {
     imageBlit.srcSubresource.baseArrayLayer = 0;
     imageBlit.srcSubresource.layerCount = 1;
     imageBlit.srcOffsets[0] = {0, 0, 0};
-    imageBlit.srcOffsets[1] = {static_cast<int>(pipelineContext->uiModuleContext->overlayDrawColorImage->width()),
-                               static_cast<int>(pipelineContext->uiModuleContext->overlayDrawColorImage->height()), 1};
+    imageBlit.srcOffsets[1] = {static_cast<int>(finalImage->width()), static_cast<int>(finalImage->height()), 1};
     imageBlit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     imageBlit.dstSubresource.mipLevel = 0;
     imageBlit.dstSubresource.baseArrayLayer = 0;
@@ -161,26 +156,21 @@ void FrameworkContext::fuseFinal() {
     imageBlit.dstOffsets[1] = {static_cast<int>(swapchainImage->width()), static_cast<int>(swapchainImage->height()),
                                1};
 
-    vkCmdBlitImage(fuseCommandBuffer->vkCommandBuffer(),
-                   pipelineContext->uiModuleContext->overlayDrawColorImage->vkImage(),
-                   pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout(), swapchainImage->vkImage(),
-                   swapchainImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
+    vkCmdBlitImage(fuseCommandBuffer->vkCommandBuffer(), finalImage->vkImage(), finalImage->imageLayout(),
+                   swapchainImage->vkImage(), swapchainImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
 
     fuseCommandBuffer->barriersBufferImage(
         {}, {{
                  .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                  .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                 .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                  .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                 .oldLayout = pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout(),
-#    ifdef USE_AMD
-                 .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-#    else
-                 .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-#    endif
+                 .oldLayout = finalImage->imageLayout(),
+                 .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                  .srcQueueFamilyIndex = mainQueueIndex,
                  .dstQueueFamilyIndex = mainQueueIndex,
-                 .image = pipelineContext->uiModuleContext->overlayDrawColorImage,
+                 .image = finalImage,
                  .subresourceRange = vk::wholeColorSubresourceRange,
              },
              {
@@ -196,84 +186,30 @@ void FrameworkContext::fuseFinal() {
                  .subresourceRange = vk::wholeColorSubresourceRange,
              }});
 
-#    ifdef USE_AMD
-    pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-#    else
-    pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout() = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-#    endif
+    finalImage->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
     swapchainImage->imageLayout() = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 }
-#endif
 
 Framework::Framework() {}
 
-void Framework::init(GLFWwindow *window) {
-    init(vk::createExistingWindowPresentationTarget(window, vk::WindowSurfaceBackend::Glfw), std::nullopt);
-}
-
-void Framework::init(std::shared_ptr<vk::PresentationTarget> presentationTarget,
-                     vk::OpenGLDeviceIdentity openGLDeviceIdentity) {
-    init(std::move(presentationTarget), std::make_optional(std::move(openGLDeviceIdentity)));
-}
-
-void Framework::init(std::shared_ptr<vk::PresentationTarget> presentationTarget,
-                     std::optional<vk::OpenGLDeviceIdentity> openGLDeviceIdentity) {
+void Framework::init(VulkanHandles handles) {
     MCVR_PROFILE_SCOPE("native.Framework.init");
     vk::ResourceMemoryTagScope memoryTag("framework");
-    if (presentationTarget == nullptr) { throw std::invalid_argument("Framework requires a presentation target"); }
-    const vk::WindowSurfaceBackend surfaceBackend = presentationTarget->surfaceBackend();
-    instance_ = vk::Instance::create(surfaceBackend);
-    window_ = vk::Window::create(instance_, std::move(presentationTarget));
-    physicalDevice_ = openGLDeviceIdentity.has_value() ?
-                          vk::PhysicalDevice::create(instance_, window_, std::move(openGLDeviceIdentity.value())) :
-                          vk::PhysicalDevice::create(instance_, window_);
-    device_ = vk::Device::create(instance_, window_, physicalDevice_);
+    instance_ = vk::Instance::create(handles.instance, handles.enabledInstanceExtensions);
+    window_ = vk::Window::create(instance_, handles.surface);
+    physicalDevice_ = vk::PhysicalDevice::create(instance_, handles.physicalDevice, handles.queues);
+    device_ = vk::Device::create(instance_, physicalDevice_, handles.device, handles.enabledDeviceExtensions);
+    // The device was created with bufferDeviceAddress (part of Radiance's required feature set), which VMA needs.
     vma_ = vk::VMA::create(instance_, physicalDevice_, device_);
     swapchain_ = vk::Swapchain::create(physicalDevice_, device_, window_);
     mainCommandPool_ = vk::CommandPool::create(physicalDevice_, device_);
     asyncCommandPool_ = vk::CommandPool::create(physicalDevice_, device_, physicalDevice_->secondaryQueueIndex());
     frameResourceRetainer_ = FrameResourceRetainer::create(shared_from_this());
-
-    uint32_t imageCount = swapchain_->imageCount();
-
-    for (int i = 0; i < imageCount; i++) {
-        uploadCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-        overlayCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-        worldCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-        fuseCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-#ifdef MCVR_UI_BACKEND_OPENGL
-        openGLUiPostFrameCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-#endif
-    }
-    const uint32_t presentSlotCount = imageCount * mcvr::MaxFrameGenerationMultiplier;
-    for (uint32_t i = 0; i < presentSlotCount; i++) {
-        presentCopyCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-    }
     worldAsyncCommandBuffer_ = vk::CommandBuffer::create(device_, asyncCommandPool_);
 
-    for (int i = 0; i < imageCount; i++) { commandFinishedFences_.push_back(vk::Fence::create(device_, true)); }
-#ifdef MCVR_UI_BACKEND_OPENGL
-    for (int i = 0; i < imageCount; i++) {
-        openGLUiPostFrameFinishedFences_.push_back(vk::Fence::create(device_, true));
-    }
-#endif
-    for (uint32_t i = 0; i < presentSlotCount; i++) {
-        presentCopyFinishedFences_.push_back(vk::Fence::create(device_, true));
-    }
+    createFrameResources();
 
-    for (int i = 0; i < imageCount; i++) { commandProcessedSemaphores_.push_back(vk::Semaphore::create(device_)); }
-    for (int i = 0; i < imageCount; i++) { presentCopyProcessedSemaphores_.push_back(vk::Semaphore::create(device_)); }
-    for (uint32_t i = 0; i < presentSlotCount; i++) {
-        additionalPresentImageAcquiredSemaphores_.push_back(vk::Semaphore::create(device_));
-        additionalPresentImageAcquireWaitFences_.push_back(nullptr);
-    }
-
-    for (int i = 0; i < imageCount; i++) { contexts_.push_back(FrameworkContext::create(shared_from_this(), i)); }
-
-#ifdef MCVR_UI_BACKEND_OPENGL
-    initOpenGLUiSurfaces();
-#endif
-
+    uiComposite_ = UiComposite::create(shared_from_this());
     pipeline_ = Pipeline::create(shared_from_this());
     frameGenerationManager_ = mcvr::FrameGenerationManager::create();
     frameGenerationManager_->init(shared_from_this());
@@ -282,17 +218,101 @@ void Framework::init(std::shared_ptr<vk::PresentationTarget> presentationTarget,
 Framework::~Framework() {
 }
 
-void Framework::acquireContext() {
-    if (!running_) return;
-#ifdef MCVR_UI_BACKEND_OPENGL
-    if (currentContext_ != nullptr) return;
-    if (openGLUiResizePending_ || vk::Window::framebufferResized) return;
-#endif
+void Framework::createFrameResources() {
+    const uint32_t imageCount = swapchain_->imageCount();
 
-#ifdef MCVR_UI_BACKEND_VULKAN
-    std::shared_ptr<FrameworkContext> lastContext;
-    if (currentContext_) lastContext = currentContext_;
-#endif
+    for (uint32_t i = 0; i < imageCount; i++) {
+        uploadCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
+        overlayCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
+        worldCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
+        fuseCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
+    }
+    const uint32_t presentSlotCount = imageCount * mcvr::MaxFrameGenerationMultiplier;
+    for (uint32_t i = 0; i < presentSlotCount; i++) {
+        presentCopyCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
+    }
+
+    for (uint32_t i = 0; i < imageCount; i++) { commandFinishedFences_.push_back(vk::Fence::create(device_, true)); }
+    for (uint32_t i = 0; i < presentSlotCount; i++) {
+        presentCopyFinishedFences_.push_back(vk::Fence::create(device_, true));
+    }
+
+    for (uint32_t i = 0; i < imageCount; i++) { commandProcessedSemaphores_.push_back(vk::Semaphore::create(device_)); }
+    for (uint32_t i = 0; i < imageCount; i++) {
+        presentCopyProcessedSemaphores_.push_back(vk::Semaphore::create(device_));
+    }
+    for (uint32_t i = 0; i < presentSlotCount; i++) {
+        additionalPresentImageAcquiredSemaphores_.push_back(vk::Semaphore::create(device_));
+        additionalPresentImageAcquireWaitFences_.push_back(nullptr);
+    }
+
+    for (uint32_t i = 0; i < imageCount; i++) { contexts_.push_back(FrameworkContext::create(shared_from_this(), i)); }
+}
+
+void Framework::clearFrameResources() {
+    currentContextIndex_ = 0;
+    currentContext_ = nullptr;
+    contexts_.clear();
+
+    uploadCommandBuffers_.clear();
+    overlayCommandBuffers_.clear();
+    worldCommandBuffers_.clear();
+    fuseCommandBuffers_.clear();
+    presentCopyCommandBuffers_.clear();
+    commandFinishedFences_.clear();
+    presentCopyFinishedFences_.clear();
+    additionalPresentImageAcquireWaitFences_.clear();
+}
+
+bool Framework::configureSwapchain(uint32_t width, uint32_t height, uint32_t presentMode) {
+    MCVR_PROFILE_SCOPE("native.Framework.configureSwapchain");
+    if (!running_ || width == 0 || height == 0) return false;
+
+    VkPresentModeKHR vkPresentMode;
+    switch (presentMode) {
+        case 0: vkPresentMode = VK_PRESENT_MODE_IMMEDIATE_KHR; break;
+        case 1: vkPresentMode = VK_PRESENT_MODE_MAILBOX_KHR; break;
+        case 3: vkPresentMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR; break;
+        case 2:
+        default: vkPresentMode = VK_PRESENT_MODE_FIFO_KHR; break;
+    }
+
+    std::unique_lock<std::recursive_mutex> lck(recreateMtx_);
+    swapchain_->setDesiredConfiguration(width, height, vkPresentMode);
+    if (!swapchainSuboptimal_.load() && swapchain_->matchesDesiredConfiguration()) return true;
+
+    try {
+        recreate();
+    } catch (const std::exception &error) {
+        std::cerr << "[Framework] failed to configure the swapchain: " << error.what() << std::endl;
+        return false;
+    }
+    return !swapchainSuboptimal_.load();
+}
+
+bool Framework::isSwapchainSuboptimal() {
+    if (swapchainSuboptimal_.load()) return true;
+    if (!running_ || swapchain_ == nullptr) return false;
+
+    VkSurfaceCapabilitiesKHR capabilities;
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
+                                                  &capabilities) != VK_SUCCESS) {
+        return false;
+    }
+    const VkExtent2D extent = swapchain_->vkExtent();
+    return capabilities.currentExtent.width != 0xFFFFFFFFu && capabilities.currentExtent.width != 0 &&
+           capabilities.currentExtent.height != 0 &&
+           (capabilities.currentExtent.width != extent.width || capabilities.currentExtent.height != extent.height);
+}
+
+bool Framework::acquireContext() {
+    std::unique_lock<std::recursive_mutex> lck(recreateMtx_);
+    return acquireContextLocked(false);
+}
+
+bool Framework::acquireContextLocked(bool recreateWhenOutOfDate) {
+    if (!running_) return false;
+    if (currentContext_ != nullptr) return true;
 
 #if defined(MCVR_ENABLE_PROFILER)
     const auto acquireStart = std::chrono::steady_clock::now();
@@ -300,34 +320,28 @@ void Framework::acquireContext() {
     std::shared_ptr<vk::Semaphore> imageAcquiredSemaphore;
     uint32_t imageIndex = 0;
     for (;;) {
-        if (prefetchedImageSemaphore_ != nullptr) {
-            imageAcquiredSemaphore = std::move(prefetchedImageSemaphore_);
-            imageIndex = prefetchedImageIndex_;
-            break;
-        }
-        finishPendingPresent();
         imageAcquiredSemaphore = acquireSemaphore();
         VkResult result = vkAcquireNextImageKHR(device_->vkDevice(), swapchain_->vkSwapchain(), UINT64_MAX,
                                                 imageAcquiredSemaphore->vkSemaphore(), VK_NULL_HANDLE, &imageIndex);
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            // A semaphore passed to a failed acquire is unsignaled and stays reusable.
             recycleSemaphore(imageAcquiredSemaphore);
-#ifdef MCVR_UI_BACKEND_OPENGL
-            requestOpenGLUiResize();
-            return;
-#else
+            swapchainSuboptimal_.store(true);
+            if (!recreateWhenOutOfDate) return false;
             recreate();
-            if (!running_) { return; }
-            lastContext = nullptr;
+            if (!running_) { return false; }
             continue;
-#endif
+        }
+        if (result == VK_ERROR_SURFACE_LOST_KHR && !recreateWhenOutOfDate) {
+            recycleSemaphore(imageAcquiredSemaphore);
+            swapchainSuboptimal_.store(true);
+            return false;
         }
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
             recycleSemaphore(imageAcquiredSemaphore);
             vk::requireSuccess(result, "vkAcquireNextImageKHR(main frame)");
         }
-#ifdef MCVR_UI_BACKEND_OPENGL
-        if (result == VK_SUBOPTIMAL_KHR) { requestOpenGLUiResize(); }
-#endif
+        if (result == VK_SUBOPTIMAL_KHR) { swapchainSuboptimal_.store(true); }
         break;
     }
 
@@ -356,8 +370,6 @@ void Framework::acquireContext() {
     MCVR_PROFILE_METRIC("frame_acquire.present_copy_fences_ns",
                        std::chrono::duration_cast<std::chrono::nanoseconds>(copiesReady - commandReady).count());
 #endif
-    indexHistory_.push(imageIndex);
-    if (indexHistory_.size() > swapchain_->imageCount()) indexHistory_.pop();
     frameResourceRetainer_->beginFrame(imageIndex);
 
     if (currentContext_->imageAcquiredSemaphore != nullptr) {
@@ -375,15 +387,6 @@ void Framework::acquireContext() {
     currentContext_->overlayCommandBuffer->beginDebugLabel("ui", 0.95f, 0.55f, 0.25f);
     currentContext_->fuseCommandBuffer->beginDebugLabel("present", 0.85f, 0.35f, 0.65f);
 
-#ifdef MCVR_UI_BACKEND_VULKAN
-    auto pipelineContext = pipeline_->acquirePipelineContext(currentContext_);
-    std::shared_ptr<UIModuleContext> lastUIContext =
-        lastContext == nullptr ? nullptr : pipeline_->acquirePipelineContext(lastContext)->uiModuleContext;
-    {
-        MCVR_PROFILE_SCOPE("native.ui.begin");
-        pipelineContext->uiModuleContext->begin(lastUIContext);
-    }
-#endif
     {
         MCVR_PROFILE_SCOPE("native.frame.reset");
         Renderer::instance().buffers()->resetFrame();
@@ -392,6 +395,12 @@ void Framework::acquireContext() {
         Renderer::instance().world()->chunks()->resetFrame();
         Renderer::instance().world()->entities()->resetFrame();
     }
+    return true;
+}
+
+void Framework::setPresentSource(VkImage image, VkImageView imageView, uint32_t width, uint32_t height) {
+    if (uiComposite_ == nullptr) return;
+    uiComposite_->uiSurface()->setTarget(image, imageView, width, height);
 }
 
 void Framework::submitFrameCommandBuffers(VkSemaphore signalSemaphore) {
@@ -472,7 +481,7 @@ void Framework::submitCommand() {
     MCVR_PROFILE_SCOPE("native.Framework.submitCommand");
     if (!running_) return;
 
-    Renderer::instance().framework()->safeAcquireCurrentContext();
+    safeAcquireCurrentContext();
 
     {
         vk::CommandBuffer::ScopedDebugLabel debugLabel(*currentContext_->uploadCommandBuffer, "upload/textures", 0.25f,
@@ -494,21 +503,13 @@ void Framework::submitCommand() {
         MCVR_PROFILE_SCOPE("native.Buffers.performQueuedUpload");
         Renderer::instance().buffers()->performQueuedUpload();
     }
-    {
-        vk::CommandBuffer::ScopedDebugLabel debugLabel(*currentContext_->uploadCommandBuffer, "upload/overlay_uniforms",
-                                                       0.40f, 0.65f, 0.95f);
-        MCVR_PROFILE_SCOPE("native.Buffers.buildAndUploadOverlayUniformBuffer");
-        Renderer::instance().buffers()->buildAndUploadOverlayUniformBuffer();
-    }
 
     auto pipelineContext = pipeline_->acquirePipelineContext(currentContext_);
-    if (Renderer::instance().world()->shouldRender()) { pipelineContext->worldPipelineContext->render(); }
-#ifdef MCVR_UI_BACKEND_VULKAN
+    const bool renderWorld = Renderer::instance().world()->shouldRender() && pipelineContext->worldPipelineContext != nullptr;
+    if (renderWorld) { pipelineContext->worldPipelineContext->render(); }
     {
-        vk::CommandBuffer::ScopedDebugLabel debugLabel(*currentContext_->overlayCommandBuffer, "ui/end", 0.95f, 0.55f,
-                                                       0.25f);
-        MCVR_PROFILE_SCOPE("native.ui.end");
-        pipelineContext->uiModuleContext->end();
+        MCVR_PROFILE_SCOPE("native.ui.composite");
+        uiComposite_->record(currentContext_, renderWorld);
     }
 
     bool frameGenerationEvaluated = false;
@@ -518,7 +519,6 @@ void Framework::submitCommand() {
         frameGenerationEvaluated = frameGenerationManager_->recordEvaluation(currentContext_);
     }
     if (!frameGenerationEvaluated) { currentContext_->fuseFinal(); }
-#endif
 
     {
         MCVR_PROFILE_SCOPE("native.commandBuffers.end");
@@ -529,409 +529,14 @@ void Framework::submitCommand() {
     }
 
     submitFrameCommandBuffers(currentContext_->commandProcessedSemaphore->vkSemaphore());
+    // Minecraft recreates its main target on resize, so the surface is only valid for the frame it was set for.
+    uiComposite_->uiSurface()->clearTarget();
 }
-
-#ifdef MCVR_UI_BACKEND_OPENGL
-std::shared_ptr<mcvr::OpenGLUiSurface> Framework::prepareOpenGLUiFrame() try {
-    MCVR_PROFILE_SCOPE("native.Framework.prepareOpenGLUiFrame");
-    if (!running_) return nullptr;
-    if (currentContext_ == nullptr) {
-        throw std::runtime_error("OpenGL UI frame preparation requires an acquired Vulkan context");
-    }
-
-    auto pipelineContext = pipeline_->acquirePipelineContext(currentContext_);
-    auto world = Renderer::instance().world();
-    const bool renderWorld =
-        world != nullptr && world->shouldRender() && pipelineContext->worldPipelineContext != nullptr;
-
-    {
-        MCVR_PROFILE_SCOPE("native.Textures.performQueuedUpload");
-        Renderer::instance().textures()->performQueuedUpload(true);
-    }
-    {
-        MCVR_PROFILE_SCOPE("native.Chunks.queueChunkPackedDataUpload");
-        auto chunks = world != nullptr ? world->chunks() : nullptr;
-        if (chunks != nullptr) { chunks->queueChunkPackedDataUpload(); }
-    }
-    {
-        MCVR_PROFILE_SCOPE("native.Buffers.performQueuedWorldUpload");
-        Renderer::instance().buffers()->performQueuedWorldUpload();
-    }
-
-    if (renderWorld) { pipelineContext->worldPipelineContext->render(); }
-
-    auto surface = openGLUiSurfaces_.at(currentContext_->frameIndex);
-    auto mainQueueIndex = physicalDevice_->mainQueueIndex();
-    auto commandBuffer = currentContext_->fuseCommandBuffer;
-    auto worldImage =
-        pipelineContext->worldPipelineContext == nullptr ? nullptr : pipelineContext->worldPipelineContext->outputImage;
-    const bool copyWorld = renderWorld && worldImage != nullptr;
-
-    if (copyWorld) {
-        commandBuffer->barriersBufferImage(
-            {}, {
-                    {
-                        .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
-                        .oldLayout = worldImage->imageLayout(),
-                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        .srcQueueFamilyIndex = mainQueueIndex,
-                        .dstQueueFamilyIndex = mainQueueIndex,
-                        .image = worldImage,
-                        .subresourceRange = vk::wholeColorSubresourceRange,
-                    },
-                    {
-                        .srcStageMask = surface->imageLayout() == VK_IMAGE_LAYOUT_UNDEFINED ?
-                                            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT :
-                                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        .srcAccessMask = surface->imageLayout() == VK_IMAGE_LAYOUT_UNDEFINED ?
-                                             0 :
-                                             VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        .oldLayout = surface->imageLayout(),
-                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        .srcQueueFamilyIndex = surface->ownedByExternal() ? VK_QUEUE_FAMILY_EXTERNAL : mainQueueIndex,
-                        .dstQueueFamilyIndex = mainQueueIndex,
-                        .image = surface,
-                        .subresourceRange = surface->fullSubresourceRange(),
-                    },
-                });
-        VkImageLayout worldRestoreLayout =
-#    ifdef USE_AMD
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-#    else
-            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-#    endif
-        worldImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        surface->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        surface->setOwnedByExternal(false);
-
-        VkImageBlit imageBlit{};
-        imageBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        imageBlit.srcSubresource.mipLevel = 0;
-        imageBlit.srcSubresource.baseArrayLayer = 0;
-        imageBlit.srcSubresource.layerCount = 1;
-        imageBlit.srcOffsets[0] = {0, 0, 0};
-        imageBlit.srcOffsets[1] = {static_cast<int>(worldImage->width()), static_cast<int>(worldImage->height()), 1};
-        imageBlit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        imageBlit.dstSubresource.mipLevel = 0;
-        imageBlit.dstSubresource.baseArrayLayer = 0;
-        imageBlit.dstSubresource.layerCount = 1;
-        imageBlit.dstOffsets[0] = {0, 0, 0};
-        imageBlit.dstOffsets[1] = {static_cast<int>(surface->width()), static_cast<int>(surface->height()), 1};
-
-        vkCmdBlitImage(commandBuffer->vkCommandBuffer(), worldImage->vkImage(), worldImage->imageLayout(),
-                       surface->vkImage(), surface->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
-
-        commandBuffer->barriersBufferImage(
-            {}, {
-                    {
-                        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        .srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                        .oldLayout = worldImage->imageLayout(),
-                        .newLayout = worldRestoreLayout,
-                        .srcQueueFamilyIndex = mainQueueIndex,
-                        .dstQueueFamilyIndex = mainQueueIndex,
-                        .image = worldImage,
-                        .subresourceRange = vk::wholeColorSubresourceRange,
-                    },
-                    {
-                        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                        .oldLayout = surface->imageLayout(),
-                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .srcQueueFamilyIndex = mainQueueIndex,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL,
-                        .image = surface,
-                        .subresourceRange = surface->fullSubresourceRange(),
-                    },
-                });
-        worldImage->imageLayout() = worldRestoreLayout;
-        surface->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
-        surface->setOwnedByExternal(true);
-    } else {
-        commandBuffer->barriersBufferImage(
-            {}, {{
-                    .srcStageMask = surface->imageLayout() == VK_IMAGE_LAYOUT_UNDEFINED ?
-                                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT :
-                                        VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    .srcAccessMask = surface->imageLayout() == VK_IMAGE_LAYOUT_UNDEFINED ?
-                                         0 :
-                                         VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .oldLayout = surface->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .srcQueueFamilyIndex = surface->ownedByExternal() ? VK_QUEUE_FAMILY_EXTERNAL : mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = surface,
-                    .subresourceRange = surface->fullSubresourceRange(),
-                }});
-        surface->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        surface->setOwnedByExternal(false);
-
-        VkClearColorValue clearColor{};
-        clearColor.float32[3] = 1.0f;
-        auto surfaceRange = surface->fullSubresourceRange();
-        vkCmdClearColorImage(commandBuffer->vkCommandBuffer(), surface->vkImage(), surface->imageLayout(), &clearColor,
-                             1, &surfaceRange);
-
-        commandBuffer->barriersBufferImage(
-            {}, {{
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = surface->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL,
-                    .image = surface,
-                    .subresourceRange = surfaceRange,
-                }});
-        surface->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
-        surface->setOwnedByExternal(true);
-    }
-
-    {
-        MCVR_PROFILE_SCOPE("native.commandBuffers.end");
-        currentContext_->uploadCommandBuffer->endDebugLabel()->end();
-        currentContext_->worldCommandBuffer->end();
-        currentContext_->overlayCommandBuffer->endDebugLabel()->end();
-        currentContext_->fuseCommandBuffer->endDebugLabel()->end();
-    }
-
-    Renderer::instance().textures()->submitDeferredUploads();
-    submitFrameCommandBuffers(surface->vulkanReadySemaphore());
-
-    return surface;
-} catch (...) {
-    try {
-        auto textures = Renderer::instance().textures();
-        if (textures != nullptr) { textures->submitDeferredUploads(); }
-    } catch (const std::exception &error) {
-        std::fprintf(stderr, "[Framework] Failed to submit deferred texture uploads during frame cleanup: %s\n",
-                     error.what());
-    } catch (...) {
-        std::fprintf(stderr, "[Framework] Failed to submit deferred texture uploads during frame cleanup\n");
-    }
-    throw;
-}
-
-mcvr::OpenGLUiSurfaceExport Framework::exportOpenGLUiSurface(uint32_t frameIndex) {
-    if (frameIndex >= openGLUiSurfaces_.size() || openGLUiSurfaces_[frameIndex] == nullptr) {
-        throw std::runtime_error("OpenGL UI surface index is out of range");
-    }
-    return openGLUiSurfaces_[frameIndex]->exportHandles();
-}
-
-std::shared_ptr<mcvr::OpenGLUiSurface> Framework::openGLUiSurface(uint32_t frameIndex) {
-    if (frameIndex >= openGLUiSurfaces_.size()) { return nullptr; }
-    return openGLUiSurfaces_[frameIndex];
-}
-
-bool Framework::submitOpenGLUiPostFrameCommands(std::shared_ptr<vk::CommandBuffer> commandBuffer,
-                                                std::shared_ptr<vk::Fence> fence,
-                                                VkSemaphore waitSemaphore,
-                                                VkSemaphore signalSemaphore) {
-    if (commandBuffer == nullptr || fence == nullptr) { return false; }
-
-    vk::waitForFence(device_->vkDevice(), fence->vkFence(), "vkWaitForFences(OpenGL UI post frame)");
-    vk::requireSuccess(vkResetFences(device_->vkDevice(), 1, &fence->vkFence()), "vkResetFences(OpenGL UI post frame)");
-
-    commandBuffer->reset()->begin();
-    auto context = currentContext_;
-    auto frameGenerationManager = frameGenerationManager_;
-    bool frameGenerationEvaluated =
-        frameGenerationManager != nullptr && frameGenerationManager->recordEvaluation(context, commandBuffer);
-    commandBuffer->end();
-
-    VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    VkCommandBuffer vkCommandBuffer = commandBuffer->vkCommandBuffer();
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &waitSemaphore;
-    submitInfo.pWaitDstStageMask = &waitStageMask;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &vkCommandBuffer;
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &signalSemaphore;
-
-    {
-        std::unique_lock<std::recursive_mutex> queueLock(device_->mainQueueMutex());
-        vk::requireSuccess(vkQueueSubmit(device_->mainVkQueue(), 1, &submitInfo, fence->vkFence()),
-                           "vkQueueSubmit(OpenGL UI post frame)");
-    }
-
-    if (frameGenerationEvaluated) {
-        if (frameGenerationManager->hasPendingEvaluation()) {
-            if (presentFrameGenerationEvaluation()) {
-                MCVR_RECORD_FRAME_MEMORY_METRICS("end");
-                MCVR_PROFILE_END_FRAME();
-                limitFrameRate();
-            }
-            frameGenerationManager->clearPendingEvaluation();
-        }
-        return true;
-    }
-
-    return false;
-}
-
-void Framework::submitOpenGLUiFrame() {
-    MCVR_PROFILE_SCOPE("native.Framework.submitOpenGLUiFrame");
-    if (!running_) return;
-    if (currentContext_ == nullptr) { return; }
-
-    auto surface = openGLUiSurfaces_.at(currentContext_->frameIndex);
-    const uint32_t imageIndex = currentContext_->frameIndex;
-    auto commandProcessedSemaphore = currentContext_->commandProcessedSemaphore;
-    auto swapchainImage = swapchain_->swapchainImages()[imageIndex];
-    auto mainQueueIndex = physicalDevice_->mainQueueIndex();
-
-    VkSemaphore postFrameWaitSemaphore = surface->glCompleteSemaphore();
-    VkSemaphore postFrameSignalSemaphore = commandProcessedSemaphore->vkSemaphore();
-    const bool frameGenerationEvaluated = submitOpenGLUiPostFrameCommands(
-        openGLUiPostFrameCommandBuffers_.at(imageIndex), openGLUiPostFrameFinishedFences_.at(imageIndex),
-        postFrameWaitSemaphore, postFrameSignalSemaphore);
-    if (frameGenerationEvaluated) {
-        currentContext_ = nullptr;
-        return;
-    }
-
-    auto commandBuffer = presentCopyCommandBuffers_.at(imageIndex * mcvr::MaxFrameGenerationMultiplier);
-    auto fence = presentCopyFinishedFences_.at(imageIndex * mcvr::MaxFrameGenerationMultiplier);
-    vk::waitForFence(device_->vkDevice(), fence->vkFence(), "vkWaitForFences(OpenGL UI present copy)");
-    vk::requireSuccess(vkResetFences(device_->vkDevice(), 1, &fence->vkFence()),
-                       "vkResetFences(OpenGL UI present copy)");
-    commandBuffer->reset()->begin();
-
-    commandBuffer->barriersBufferImage(
-        {}, {
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
-                    .oldLayout = surface->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    .srcQueueFamilyIndex = surface->ownedByExternal() ? VK_QUEUE_FAMILY_EXTERNAL : mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = surface,
-                    .subresourceRange = surface->fullSubresourceRange(),
-                },
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .oldLayout = swapchainImage->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = swapchainImage,
-                    .subresourceRange = vk::wholeColorSubresourceRange,
-                },
-            });
-    surface->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    surface->setOwnedByExternal(false);
-    swapchainImage->imageLayout() = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-
-    VkImageBlit imageBlit{};
-    imageBlit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    imageBlit.srcSubresource.mipLevel = 0;
-    imageBlit.srcSubresource.baseArrayLayer = 0;
-    imageBlit.srcSubresource.layerCount = 1;
-    imageBlit.srcOffsets[0] = {0, 0, 0};
-    imageBlit.srcOffsets[1] = {static_cast<int>(surface->width()), static_cast<int>(surface->height()), 1};
-    imageBlit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    imageBlit.dstSubresource.mipLevel = 0;
-    imageBlit.dstSubresource.baseArrayLayer = 0;
-    imageBlit.dstSubresource.layerCount = 1;
-    imageBlit.dstOffsets[0] = {0, 0, 0};
-    imageBlit.dstOffsets[1] = {static_cast<int>(swapchainImage->width()), static_cast<int>(swapchainImage->height()),
-                               1};
-
-    vkCmdBlitImage(commandBuffer->vkCommandBuffer(), surface->vkImage(), surface->imageLayout(),
-                   swapchainImage->vkImage(), swapchainImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
-
-    commandBuffer->barriersBufferImage(
-        {}, {
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = surface->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = surface,
-                    .subresourceRange = surface->fullSubresourceRange(),
-                },
-                {
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
-                    .dstAccessMask = 0,
-                    .oldLayout = swapchainImage->imageLayout(),
-                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = swapchainImage,
-                    .subresourceRange = vk::wholeColorSubresourceRange,
-                },
-            });
-    surface->imageLayout() = VK_IMAGE_LAYOUT_GENERAL;
-    swapchainImage->imageLayout() = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    commandBuffer->end();
-
-    VkSemaphore waitSemaphore = commandProcessedSemaphore->vkSemaphore();
-    VkSemaphore signalSemaphore = presentCopyProcessedSemaphores_[imageIndex]->vkSemaphore();
-    VkCommandBuffer vkCommandBuffer = commandBuffer->vkCommandBuffer();
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = &waitSemaphore;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &vkCommandBuffer;
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &signalSemaphore;
-
-    VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    submitInfo.pWaitDstStageMask = &waitStageMask;
-
-    {
-        std::unique_lock<std::recursive_mutex> queueLock(device_->mainQueueMutex());
-        vk::requireSuccess(vkQueueSubmit(device_->mainVkQueue(), 1, &submitInfo, fence->vkFence()),
-                           "vkQueueSubmit(OpenGL UI present copy)");
-    }
-
-    if (presentSwapchainImage(imageIndex, presentCopyProcessedSemaphores_[imageIndex]->vkSemaphore(), true)) {
-        MCVR_RECORD_FRAME_MEMORY_METRICS("end");
-        MCVR_PROFILE_END_FRAME();
-        limitFrameRate();
-    }
-    currentContext_ = nullptr;
-}
-#endif
 
 void Framework::present() {
     MCVR_PROFILE_SCOPE("native.Framework.present");
     if (!running_) return;
+    if (currentContext_ == nullptr) return;
 
     if (frameGenerationManager_ != nullptr && frameGenerationManager_->hasPendingEvaluation()) {
         if (presentFrameGenerationEvaluation()) {
@@ -940,6 +545,7 @@ void Framework::present() {
             limitFrameRate();
         }
         frameGenerationManager_->clearPendingEvaluation();
+        currentContext_ = nullptr;
         return;
     }
 
@@ -958,22 +564,15 @@ void Framework::present() {
         result = vkQueuePresentKHR(device_->presentQueue(), &presentInfo);
     }
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { recordPresentedFrame(); }
+    currentContext_ = nullptr;
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || vk::Window::framebufferResized ||
-        Renderer::options.needRecreate || pipeline_->isRecreationNeeded()
-#ifdef MCVR_UI_BACKEND_OPENGL
-        || openGLUiResizePending_
-#endif
-    ) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) { swapchainSuboptimal_.store(true); }
+    if (Renderer::options.needRecreate || pipeline_->isRecreationNeeded()) {
         MCVR_RECORD_FRAME_MEMORY_METRICS("end");
         MCVR_PROFILE_END_FRAME();
-#ifdef MCVR_UI_BACKEND_OPENGL
-        requestOpenGLUiResize();
-#else
         recreate();
-#endif
         return;
-    } else if (result != VK_SUCCESS) {
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
         vk::requireSuccess(result, "vkQueuePresentKHR(main frame)");
     }
 
@@ -982,60 +581,9 @@ void Framework::present() {
     limitFrameRate();
 }
 
-void Framework::finishPendingPresent() {
-    if (!pendingPresent_.valid()) return;
-    MCVR_PROFILE_SCOPE("native.Framework.waitPendingPresent");
-    const VkResult result = pendingPresent_.get();
-    if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) recordPresentedFrame();
-#ifdef MCVR_UI_BACKEND_OPENGL
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        requestOpenGLUiResize();
-        return;
-    }
-#endif
-    vk::requireSuccess(result, "vkQueuePresentKHR(asynchronous OpenGL UI frame)");
-}
-
-bool Framework::presentSwapchainImage(uint32_t imageIndex, VkSemaphore waitSemaphore, bool overlapNextFrame) {
+bool Framework::presentSwapchainImage(uint32_t imageIndex, VkSemaphore waitSemaphore) {
     MCVR_PROFILE_SCOPE("native.Framework.presentSwapchainImage");
     MCVR_PROFILE_METRIC("present.independent_queue", device_->presentQueue() != device_->mainVkQueue());
-    finishPendingPresent();
-#ifdef MCVR_UI_BACKEND_OPENGL
-    if (overlapNextFrame && Renderer::options.frameGenerationMode == 0 && !hasOpenGLUiResizePending()) {
-        auto semaphore = acquireSemaphore();
-        uint32_t nextImage = 0;
-        const VkResult acquired = vkAcquireNextImageKHR(device_->vkDevice(), swapchain_->vkSwapchain(), 0,
-            semaphore->vkSemaphore(), VK_NULL_HANDLE, &nextImage);
-        if (acquired == VK_SUCCESS) {
-            prefetchedImageSemaphore_ = std::move(semaphore);
-            prefetchedImageIndex_ = nextImage;
-            auto device = device_;
-            auto swapchain = swapchain_;
-            pendingPresent_ = std::async(std::launch::async, [device, swapchain, imageIndex, waitSemaphore] {
-                VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
-                const VkSwapchainKHR handle = swapchain->vkSwapchain();
-                info.waitSemaphoreCount = waitSemaphore == VK_NULL_HANDLE ? 0u : 1u;
-                info.pWaitSemaphores = waitSemaphore == VK_NULL_HANDLE ? nullptr : &waitSemaphore;
-                info.swapchainCount = 1;
-                info.pSwapchains = &handle;
-                info.pImageIndices = &imageIndex;
-                std::unique_lock<std::recursive_mutex> queueLock(device->presentQueueMutex());
-                return vkQueuePresentKHR(device->presentQueue(), &info);
-            });
-            MCVR_PROFILE_METRIC("present.overlapped", 1);
-            return true;
-        }
-        if (acquired == VK_SUBOPTIMAL_KHR) {
-            retireSemaphore(std::move(semaphore));
-            requestOpenGLUiResize();
-        } else {
-            recycleSemaphore(std::move(semaphore));
-            if (acquired == VK_ERROR_OUT_OF_DATE_KHR) requestOpenGLUiResize();
-            else if (acquired != VK_NOT_READY && acquired != VK_TIMEOUT)
-                vk::requireSuccess(acquired, "vkAcquireNextImageKHR(prefetch)");
-        }
-    }
-#endif
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = waitSemaphore == VK_NULL_HANDLE ? 0u : 1u;
@@ -1052,21 +600,15 @@ bool Framework::presentSwapchainImage(uint32_t imageIndex, VkSemaphore waitSemap
     }
     if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) { recordPresentedFrame(); }
 
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || vk::Window::framebufferResized ||
-        Renderer::options.needRecreate || pipeline_->isRecreationNeeded()
-#ifdef MCVR_UI_BACKEND_OPENGL
-        || openGLUiResizePending_
-#endif
-    ) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) { swapchainSuboptimal_.store(true); }
+    if (Renderer::options.needRecreate || pipeline_->isRecreationNeeded()) {
         MCVR_RECORD_FRAME_MEMORY_METRICS("end");
         MCVR_PROFILE_END_FRAME();
-#ifdef MCVR_UI_BACKEND_OPENGL
-        requestOpenGLUiResize();
-#else
         recreate();
-#endif
         return false;
-    } else if (result != VK_SUCCESS) {
+    } else if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        return false;
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         vk::requireSuccess(result, "vkQueuePresentKHR(frame-generation image)");
     }
 
@@ -1109,21 +651,15 @@ bool Framework::acquireAdditionalPresentImage(uint32_t presentSlot, AdditionalPr
     VkResult result = vkAcquireNextImageKHR(device_->vkDevice(), swapchain_->vkSwapchain(), UINT64_MAX,
                                             semaphore->vkSemaphore(), VK_NULL_HANDLE, &imageIndex);
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        swapchainSuboptimal_.store(true);
         MCVR_RECORD_FRAME_MEMORY_METRICS("end");
         MCVR_PROFILE_END_FRAME();
-#ifdef MCVR_UI_BACKEND_OPENGL
-        requestOpenGLUiResize();
-#else
-        recreate();
-#endif
         return false;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         vk::requireSuccess(result, "vkAcquireNextImageKHR(frame-generation present)");
     }
 
-#ifdef MCVR_UI_BACKEND_OPENGL
-    if (result == VK_SUBOPTIMAL_KHR) { requestOpenGLUiResize(); }
-#endif
+    if (result == VK_SUBOPTIMAL_KHR) { swapchainSuboptimal_.store(true); }
 
     acquire.acquireSlot = presentSlot;
     acquire.imageIndex = imageIndex;
@@ -1214,14 +750,8 @@ bool Framework::submitPresentCopy(std::shared_ptr<vk::Image> sourceImage,
     vkCmdBlitImage(commandBuffer->vkCommandBuffer(), sourceImage->vkImage(), sourceImage->imageLayout(),
                    swapchainImage->vkImage(), swapchainImage->imageLayout(), 1, &imageBlit, VK_FILTER_LINEAR);
 
-    const bool restoreExternalOpenGLSurfaceAsGeneral =
-#ifdef MCVR_UI_BACKEND_OPENGL
-        std::dynamic_pointer_cast<mcvr::OpenGLUiSurface>(sourceImage) != nullptr;
-#else
-        false;
-#endif
     VkImageLayout restoredSourceLayout = VK_IMAGE_LAYOUT_GENERAL;
-    if (!restoreExternalOpenGLSurfaceAsGeneral && restoreAsFinalColor) {
+    if (restoreAsFinalColor) {
 #ifdef USE_AMD
         restoredSourceLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 #else
@@ -1392,150 +922,44 @@ void Framework::limitFrameRate() {
     }
 }
 
-#ifdef MCVR_UI_BACKEND_OPENGL
-void Framework::initOpenGLUiSurfaces() {
-    MCVR_PROFILE_SCOPE("native.Framework.initOpenGLUiSurfaces");
-    openGLUiSurfaces_.clear();
-    auto extent = swapchain_->vkExtent();
-    openGLUiSurfaces_.reserve(swapchain_->imageCount());
-    for (uint32_t i = 0; i < swapchain_->imageCount(); i++) {
-        openGLUiSurfaces_.push_back(mcvr::OpenGLUiSurface::create(physicalDevice_, device_, openGLUiSurfaceGeneration_,
-                                                                  i, extent.width, extent.height));
-    }
-}
-
-void Framework::clearOpenGLUiSurfaces() {
-    MCVR_PROFILE_SCOPE("native.Framework.clearOpenGLUiSurfaces");
-    retiredOpenGLUiSurfaces_.insert(retiredOpenGLUiSurfaces_.end(), openGLUiSurfaces_.begin(), openGLUiSurfaces_.end());
-    openGLUiSurfaces_.clear();
-    openGLUiSurfaceGeneration_++;
-}
-
-void Framework::releaseRetiredOpenGLUiSurfaces() {
-    MCVR_PROFILE_SCOPE("native.Framework.releaseRetiredOpenGLUiSurfaces");
-    retiredOpenGLUiSurfaces_.clear();
-}
-
-void Framework::requestOpenGLUiResize() {
-    openGLUiResizePending_ = true;
-}
-
-bool Framework::hasOpenGLUiResizePending() const {
-    return openGLUiResizePending_ || vk::Window::framebufferResized || Renderer::options.needRecreate ||
-           pipeline_->isRecreationNeeded();
-}
-
-bool Framework::hasOpenGLUiFrame() const {
-    return currentContext_ != nullptr;
-}
-
-bool Framework::prepareOpenGLUiResize() {
-    if (!running_) return true;
-    if (!hasOpenGLUiResizePending()) return true;
-
-    requestOpenGLUiResize();
-    if (currentContext_ != nullptr) return false;
-
-    waitDeviceIdle();
-    return true;
-}
-
-void Framework::completeOpenGLUiResize() {
-    if (!running_ || !openGLUiResizePending_ || currentContext_ != nullptr) return;
-
-    recreate();
-    releaseRetiredOpenGLUiSurfaces();
-    openGLUiResizePending_ = false;
-}
-#endif
-
 void Framework::recreate() {
     MCVR_PROFILE_SCOPE("native.Framework.recreate");
     if (!running_) return;
 
-    std::unique_lock<std::recursive_mutex> lck(Renderer::instance().framework()->recreateMtx());
+    std::unique_lock<std::recursive_mutex> lck(recreateMtx_);
     const bool reportNativeProgress = Pipeline::nativeRebuildActive();
 
     try {
-        const bool recreateSurface = vk::Window::framebufferResized;
-        Renderer::options.needRecreate = false;
-        vk::Window::framebufferResized = false;
-        waitDeviceIdle();
-
-        int width = 0, height = 0;
-        GLFW_GetFramebufferSize(window_->window(), &width, &height);
-        while (width == 0 || height == 0) {
-            GLFW_WaitEvents();
-            GLFW_GetFramebufferSize(window_->window(), &width, &height);
+        // A minimized window has a zero-sized surface, which no swapchain can be created for. Minecraft reconfigures
+        // the swapchain once the window has a size again.
+        VkSurfaceCapabilitiesKHR capabilities;
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_->vkPhysicalDevice(), window_->vkSurface(),
+                                                      &capabilities) == VK_SUCCESS &&
+            capabilities.currentExtent.width != 0xFFFFFFFFu &&
+            (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0)) {
+            swapchainSuboptimal_.store(true);
+            if (reportNativeProgress) { Pipeline::endNativeRebuild(); }
+            return;
         }
 
+        Renderer::options.needRecreate = false;
+        waitDeviceIdle();
+
         retireContextImageAcquiredSemaphores();
-        retireSemaphore(std::move(prefetchedImageSemaphore_));
         retireSemaphores(commandProcessedSemaphores_);
         retireSemaphores(presentCopyProcessedSemaphores_);
         retireSemaphores(additionalPresentImageAcquiredSemaphores_);
         retireQueuedSemaphores(recycledImageAcquiredSemaphores_);
-#ifdef MCVR_UI_BACKEND_OPENGL
-        clearOpenGLUiSurfaces();
-#endif
+        clearFrameResources();
 
-        currentContextIndex_ = 0;
-        currentContext_ = nullptr;
-        contexts_.clear();
-
-        uploadCommandBuffers_.clear();
-        overlayCommandBuffers_.clear();
-        worldCommandBuffers_.clear();
-        fuseCommandBuffers_.clear();
-#ifdef MCVR_UI_BACKEND_OPENGL
-        openGLUiPostFrameCommandBuffers_.clear();
-#endif
-        presentCopyCommandBuffers_.clear();
-        commandFinishedFences_.clear();
-#ifdef MCVR_UI_BACKEND_OPENGL
-        openGLUiPostFrameFinishedFences_.clear();
-#endif
-        presentCopyFinishedFences_.clear();
-        additionalPresentImageAcquireWaitFences_.clear();
-
-        swapchain_->reconstruct(recreateSurface);
+        swapchain_->reconstruct();
+        swapchainSuboptimal_.store(false);
 
         uint32_t size = swapchain_->imageCount();
         frameResourceRetainer_->reset(size);
 
-        for (int i = 0; i < size; i++) {
-            uploadCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-            overlayCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-            worldCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-            fuseCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-#ifdef MCVR_UI_BACKEND_OPENGL
-            openGLUiPostFrameCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-#endif
-        }
-        const uint32_t presentSlotCount = size * mcvr::MaxFrameGenerationMultiplier;
-        for (uint32_t i = 0; i < presentSlotCount; i++) {
-            presentCopyCommandBuffers_.emplace_back(vk::CommandBuffer::create(device_, mainCommandPool_));
-        }
-
-        for (int i = 0; i < size; i++) { commandFinishedFences_.push_back(vk::Fence::create(device_, true)); }
-#ifdef MCVR_UI_BACKEND_OPENGL
-        for (int i = 0; i < size; i++) { openGLUiPostFrameFinishedFences_.push_back(vk::Fence::create(device_, true)); }
-#endif
-        for (uint32_t i = 0; i < presentSlotCount; i++) {
-            presentCopyFinishedFences_.push_back(vk::Fence::create(device_, true));
-        }
-
-        for (int i = 0; i < size; i++) { commandProcessedSemaphores_.push_back(vk::Semaphore::create(device_)); }
-        for (int i = 0; i < size; i++) { presentCopyProcessedSemaphores_.push_back(vk::Semaphore::create(device_)); }
-        for (uint32_t i = 0; i < presentSlotCount; i++) {
-            additionalPresentImageAcquiredSemaphores_.push_back(vk::Semaphore::create(device_));
-            additionalPresentImageAcquireWaitFences_.push_back(nullptr);
-        }
-
-        for (int i = 0; i < size; i++) { contexts_.push_back(FrameworkContext::create(shared_from_this(), i)); }
-#ifdef MCVR_UI_BACKEND_OPENGL
-        initOpenGLUiSurfaces();
-#endif
+        createFrameResources();
+        uiComposite_ = UiComposite::create(shared_from_this());
 
         if (frameGenerationManager_ != nullptr) { frameGenerationManager_->recreate(); }
         pipeline_->recreate(shared_from_this());
@@ -1550,14 +974,12 @@ void Framework::recreate() {
 }
 
 void Framework::waitDeviceIdle() {
-    finishPendingPresent();
     std::scoped_lock queueLock(device_->mainQueueMutex(), device_->secondaryQueueMutex(),
                                device_->asyncComputeQueueMutex(), device_->presentQueueMutex());
     vk::requireSuccess(vkDeviceWaitIdle(device_->vkDevice()), "vkDeviceWaitIdle");
 }
 
 void Framework::waitRenderQueueIdle() {
-    finishPendingPresent();
     std::scoped_lock queueLock(device_->mainQueueMutex(), device_->presentQueueMutex());
     vk::requireSuccess(vkQueueWaitIdle(device_->mainVkQueue()), "vkQueueWaitIdle(main queue)");
     if (device_->presentQueue() != device_->mainVkQueue()) {
@@ -1571,12 +993,7 @@ void Framework::waitBackendQueueIdle() {
 }
 
 void Framework::close() {
-    finishPendingPresent();
     if (running_) {
-#ifdef MCVR_UI_BACKEND_OPENGL
-        clearOpenGLUiSurfaces();
-        retiredOpenGLUiSurfaces_.clear();
-#endif
         pipeline_->close();
         if (frameGenerationManager_ != nullptr) { frameGenerationManager_->close(); }
         NgxContext::shutdownShared();
@@ -1586,119 +1003,6 @@ void Framework::close() {
 
 bool Framework::isRunning() {
     return running_;
-}
-
-void Framework::takeScreenshot(bool withUI, int width, int height, int channel, void *dstPointer) {
-    if (indexHistory_.empty()) return;
-
-    uint32_t targetIndex = indexHistory_.front();
-    auto context = contexts_[targetIndex];
-    std::shared_ptr<vk::Fence> fence = context->commandFinishedFence;
-    vk::waitForFence(device_->vkDevice(), fence->vkFence(), "vkWaitForFences(screenshot source frame)");
-
-    std::shared_ptr<vk::HostVisibleBuffer> dstBuffer;
-    std::shared_ptr<vk::Image> srcImage;
-    VkImageLayout *srcImageLayout = nullptr;
-    VkImageSubresourceRange srcSubresourceRange = vk::wholeColorSubresourceRange;
-
-    if (withUI) {
-#ifdef MCVR_UI_BACKEND_VULKAN
-        auto pipelineContext = pipeline_->acquirePipelineContext(context);
-        srcImage = pipelineContext->uiModuleContext->overlayDrawColorImage;
-        srcImageLayout = &pipelineContext->uiModuleContext->overlayDrawColorImage->imageLayout();
-#else
-        if (targetIndex >= openGLUiSurfaces_.size()) return;
-        srcImage = openGLUiSurfaces_[targetIndex];
-        srcImageLayout = &openGLUiSurfaces_[targetIndex]->imageLayout();
-        srcSubresourceRange = openGLUiSurfaces_[targetIndex]->fullSubresourceRange();
-#endif
-
-        uint32_t finalImageBufferSize =
-            srcImage->width() * srcImage->height() * srcImage->layer() * vk::formatToByte(srcImage->vkFormat());
-        if (finalImageBufferSize != width * height * channel) return;
-
-        dstBuffer =
-            vk::HostVisibleBuffer::create(vma_, device_, finalImageBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    } else {
-        auto pipelineContext = pipeline_->acquirePipelineContext(context);
-        srcImage = pipelineContext->worldPipelineContext->outputImage;
-        srcImageLayout = &pipelineContext->worldPipelineContext->outputImage->imageLayout();
-
-        uint32_t worldImageBufferSize =
-            srcImage->width() * srcImage->height() * srcImage->layer() * vk::formatToByte(srcImage->vkFormat());
-        if (worldImageBufferSize != width * height * channel) return;
-
-        dstBuffer =
-            vk::HostVisibleBuffer::create(vma_, device_, worldImageBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-    }
-
-    if (srcImage == nullptr || srcImageLayout == nullptr) return;
-
-    VkImageLayout initialLayout = *srcImageLayout;
-    auto mainQueueIndex = physicalDevice_->mainQueueIndex();
-
-    std::shared_ptr<vk::CommandBuffer> oneTimeBuffer = vk::CommandBuffer::create(device_, mainCommandPool_);
-    oneTimeBuffer->begin();
-
-    oneTimeBuffer->barriersBufferImage(
-        {},
-        {{
-            .srcStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-            .oldLayout = initialLayout,
-            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            .srcQueueFamilyIndex = mainQueueIndex,
-            .dstQueueFamilyIndex = mainQueueIndex,
-            .image = srcImage,
-            .subresourceRange = srcSubresourceRange,
-        }});
-    VkBufferImageCopy bufferImageCopy{};
-    bufferImageCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    bufferImageCopy.imageSubresource.mipLevel = 0;
-    bufferImageCopy.imageSubresource.baseArrayLayer = 0;
-    bufferImageCopy.imageSubresource.layerCount = 1;
-    bufferImageCopy.imageExtent.width = srcImage->width();
-    bufferImageCopy.imageExtent.height = srcImage->height();
-    bufferImageCopy.imageExtent.depth = 1;
-    vkCmdCopyImageToBuffer(oneTimeBuffer->vkCommandBuffer(), srcImage->vkImage(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           dstBuffer->vkBuffer(), 1, &bufferImageCopy);
-    oneTimeBuffer
-        ->barriersBufferImage(
-            {}, {{
-                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
-                                    VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR |
-                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    .newLayout = initialLayout,
-                    .srcQueueFamilyIndex = mainQueueIndex,
-                    .dstQueueFamilyIndex = mainQueueIndex,
-                    .image = srcImage,
-                    .subresourceRange = srcSubresourceRange,
-                }})
-        ->end();
-
-    VkSubmitInfo vkSubmitInfo = {};
-    vkSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    vkSubmitInfo.waitSemaphoreCount = 0;
-    vkSubmitInfo.commandBufferCount = 1;
-    vkSubmitInfo.pCommandBuffers = &oneTimeBuffer->vkCommandBuffer();
-    vkSubmitInfo.signalSemaphoreCount = 0;
-    std::shared_ptr<vk::Fence> oneTimeFence = vk::Fence::create(device_);
-
-    {
-        std::unique_lock<std::recursive_mutex> queueLock(device_->mainQueueMutex());
-        vk::requireSuccess(vkQueueSubmit(device_->mainVkQueue(), 1, &vkSubmitInfo, oneTimeFence->vkFence()),
-                           "vkQueueSubmit(screenshot copy)");
-    }
-    vk::waitForFence(device_->vkDevice(), oneTimeFence->vkFence(), "vkWaitForFences(screenshot copy)");
-
-    std::memcpy(dstPointer, dstBuffer->mappedPtr(), dstBuffer->size());
 }
 
 std::recursive_mutex &Framework::recreateMtx() {
@@ -1737,6 +1041,10 @@ std::shared_ptr<vk::CommandPool> Framework::asyncCommandPool() {
     return asyncCommandPool_;
 }
 
+std::shared_ptr<UiComposite> Framework::uiComposite() {
+    return uiComposite_;
+}
+
 std::shared_ptr<vk::CommandBuffer> Framework::worldAsyncCommandBuffer() {
     return worldAsyncCommandBuffer_;
 }
@@ -1755,7 +1063,7 @@ std::vector<std::shared_ptr<FrameworkContext>> &Framework::contexts() {
 
 std::shared_ptr<FrameworkContext> Framework::safeAcquireCurrentContext() {
     std::unique_lock<std::recursive_mutex> lck(recreateMtx_);
-    while (currentContext_ == nullptr) { acquireContext(); }
+    while (currentContext_ == nullptr) { acquireContextLocked(true); }
     return currentContext_;
 }
 
@@ -1783,15 +1091,6 @@ void Framework::recycleSemaphore(std::shared_ptr<vk::Semaphore> semaphore) {
 }
 
 void Framework::waitPresentCopyFences(uint32_t imageIndex) {
-#ifdef MCVR_UI_BACKEND_OPENGL
-    if (imageIndex < openGLUiPostFrameFinishedFences_.size()) {
-        auto fence = openGLUiPostFrameFinishedFences_[imageIndex];
-        if (fence != nullptr) {
-            vk::waitForFence(device_->vkDevice(), fence->vkFence(), "vkWaitForFences(OpenGL UI post frame)");
-        }
-    }
-#endif
-
     const uint32_t presentSlotStride = mcvr::MaxFrameGenerationMultiplier;
     const uint32_t beginSlot = imageIndex * presentSlotStride;
     const uint32_t endSlot = std::min<uint32_t>(beginSlot + presentSlotStride, presentCopyFinishedFences_.size());

@@ -26,10 +26,6 @@ struct FrameworkContext;
 class WorldModule;
 struct WorldModuleContext;
 class ShaderPack;
-#ifdef MCVR_UI_BACKEND_VULKAN
-class UIModule;
-class UIModuleContext;
-#endif
 
 class WorldPipeline;
 struct WorldPipelineContext;
@@ -123,9 +119,6 @@ class Pipeline : public SharedObject<Pipeline> {
     std::vector<std::shared_ptr<PipelineContext>> &contexts();
     void bindTexture(std::shared_ptr<vk::Sampler> sampler, std::shared_ptr<vk::DeviceLocalImage> image, int index);
 
-#ifdef MCVR_UI_BACKEND_VULKAN
-    std::shared_ptr<UIModule> uiModule();
-#endif
     std::shared_ptr<WorldPipeline> worldPipeline();
 
     std::shared_ptr<WorldPipelineBlueprint> worldPipelineBlueprint();
@@ -136,9 +129,6 @@ class Pipeline : public SharedObject<Pipeline> {
 
     std::weak_ptr<Framework> framework_;
 
-#ifdef MCVR_UI_BACKEND_VULKAN
-    std::shared_ptr<UIModule> uiModule_;
-#endif
     std::shared_ptr<WorldPipeline> worldPipeline_;
 
     mutable std::mutex blueprintMtx_;
@@ -152,14 +142,7 @@ class Pipeline : public SharedObject<Pipeline> {
 struct PipelineContext : public SharedObject<PipelineContext> {
     std::weak_ptr<FrameworkContext> frameworkContext;
 
-#ifdef MCVR_UI_BACKEND_VULKAN
-    std::shared_ptr<UIModuleContext> uiModuleContext;
-#endif
     std::shared_ptr<WorldPipelineContext> worldPipelineContext;
 
     PipelineContext(std::shared_ptr<FrameworkContext> context, std::shared_ptr<Pipeline> pipeline);
-
-#ifdef MCVR_UI_BACKEND_VULKAN
-    void fuseWorld();
-#endif
 };

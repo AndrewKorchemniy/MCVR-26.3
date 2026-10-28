@@ -90,6 +90,7 @@ void main() {
     if (hasVistaMaterial(m0) && !isWaterMaterial && ubo.vistaTextureID != 0u) {
         vec2 vistaUv = baryCoords.x * m0.textureUV + baryCoords.y * m1.textureUV + baryCoords.z * m2.textureUV;
         shadedAlbedo.rgb = vistaAlbedo(textures[nonuniformEXT(ubo.vistaTextureID)], m0, vistaUv, shadedAlbedo.rgb, 0.0);
+        shadedAlbedo.a *= vistaAlpha(textures[nonuniformEXT(ubo.vistaTextureID)], m0, vistaUv, 0.0);
     }
     float alpha = resolveSurfaceAlpha(shadedAlbedo.a, alphaMode);
     if (alpha < 0.05) {

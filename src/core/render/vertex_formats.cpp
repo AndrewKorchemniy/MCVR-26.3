@@ -64,20 +64,6 @@ vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PositionCol
 }
 
 template <>
-vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PositionColorTexLightNormal>() {
-    static std::vector<VertexAttribute> attributes = {
-        {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::PositionColorTexLightNormal, position)},
-        {VK_FORMAT_R8G8B8A8_UNORM, offsetof(VertexFormat::PositionColorTexLightNormal, color)},
-        {VK_FORMAT_R32G32_SFLOAT, offsetof(VertexFormat::PositionColorTexLightNormal, uv0)},
-        {VK_FORMAT_R16G16_SINT, offsetof(VertexFormat::PositionColorTexLightNormal, uv2)},
-        {VK_FORMAT_R8G8B8A8_SNORM, offsetof(VertexFormat::PositionColorTexLightNormal, normal)},
-    };
-    static vk::VertexLayoutInfo vertexLayoutInfo =
-        initVertexLayout<vk::VertexFormat::PositionColorTexLightNormal>(attributes);
-    return vertexLayoutInfo;
-}
-
-template <>
 vk::VertexLayoutInfo &vk::Vertex::vertexLayoutInfo<vk::VertexFormat::PositionTexColorLight>() {
     static std::vector<VertexAttribute> attributes = {
         {VK_FORMAT_R32G32B32_SFLOAT, offsetof(VertexFormat::PositionTexColorLight, position)},

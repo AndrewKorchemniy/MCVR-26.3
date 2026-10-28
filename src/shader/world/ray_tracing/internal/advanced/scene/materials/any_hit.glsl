@@ -170,8 +170,14 @@ AnyHitMaterial loadAnyHitMaterial(vec2 hitAttributes,
     material.tint = max(albedo.rgb * colorLayer.rgb, vec3(0.0));
     if (hasVistaMaterial(m0) && !hasWaterMaterial(m0) && worldUBO.vistaTextureID != 0u) {
         vec2 vistaUv = bary.x * m0.textureUV + bary.y * m1.textureUV + bary.z * m2.textureUV;
+        float vistaFootprint = max(coneWidth + gl_HitTEXT * coneSpread, 0.0);
         material.tint = vistaAlbedo(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv,
-            material.tint, max(coneWidth + gl_HitTEXT * coneSpread, 0.0));
+            material.tint, vistaFootprint);
+        // The tile alpha is the cut-out mask for Vista geometry.
+        rawAlpha *= vistaAlpha(textures[nonuniformEXT(worldUBO.vistaTextureID)], m0, vistaUv, vistaFootprint);
+        material.isCovered = isAlphaCovered(rawAlpha, material.alphaMode);
+        material.opacity = resolveSurfaceOpacity(rawAlpha, material.alphaMode);
+        if (!material.isCovered) { return material; }
     }
     material.isTransparent = material.isCovered && material.opacity < 1.0 - EPS;
     if (shouldUseTexture && textureMap.flag >= 0) {
