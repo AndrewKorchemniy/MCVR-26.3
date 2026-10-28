@@ -123,6 +123,7 @@ void Textures::reset() {
         if (emission_ != nullptr) { emission_->reset(); }
     }
     releasedTextureFallbackIds_.clear();
+    freeIds_.clear();
     nextID = 0;
 }
 
@@ -157,6 +158,7 @@ void Textures::shutdown() {
         if (emission_ != nullptr) { emission_->reset(); }
         emission_.reset();
     }
+    freeIds_.clear();
     nextID = 0;
 }
 
@@ -176,6 +178,15 @@ uint32_t Textures::allocateTexture() {
     auto framework = frameworkOrThrow();
     std::scoped_lock lck(mtx_, framework->recreateMtx());
     ensureRunning();
+
+    // A released id keeps its slot (bound to a fallback texture) until it is handed out again here. Java tags each use
+    // of an id with a generation, so a reused id is never mistaken for the texture it held before.
+    while (!freeIds_.empty()) {
+        uint32_t id = freeIds_.front();
+        freeIds_.pop_front();
+        auto texture = textures_.find(id);
+        if (texture != textures_.end() && texture->second == nullptr) { return id; }
+    }
 
     // Ids of images imported from vanilla are chosen by Java, so skip any that are already taken.
     while (textures_.contains(nextID)) { nextID++; }
@@ -326,6 +337,7 @@ void Textures::releaseTexture(uint32_t id) {
     textureIter->second = nullptr;
     samplerIter->second = nullptr;
     queuedTextureClears_.erase(id);
+    freeIds_.push_back(id);
 }
 
 void Textures::queueTextureClear(uint32_t id, const VkClearColorValue &clearColor) {

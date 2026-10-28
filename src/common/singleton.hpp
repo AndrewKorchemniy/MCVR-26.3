@@ -43,9 +43,12 @@ class Singleton {
     Singleton &operator=(Singleton &&) = delete;
 
   private:
+    // Deliberately never destroyed. Java closes the renderer in order when Minecraft shuts down; if it exits any other
+    // way (a crash, System.exit), destroying the instance from a static destructor would release Vulkan and DLSS objects
+    // while the driver is already being torn down. The OS reclaims everything at exit.
     static std::unique_ptr<Derived> &storage() {
-        static std::unique_ptr<Derived> ptr;
-        return ptr;
+        static auto *ptr = new std::unique_ptr<Derived>();
+        return *ptr;
     }
     static std::atomic<Derived *> &raw() {
         static std::atomic<Derived *> p{nullptr};

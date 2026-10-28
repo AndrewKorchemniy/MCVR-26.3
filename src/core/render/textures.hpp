@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <functional>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <tuple>
@@ -76,6 +77,9 @@ class Textures : public SharedObject<Textures> {
     std::map<uint32_t, std::shared_ptr<vk::DeviceLocalImage>> textures_;
     std::map<uint32_t, std::shared_ptr<vk::Sampler>> samplers;
     std::map<uint32_t, uint32_t> releasedTextureFallbackIds_;
+    // Released ids, handed out again before nextID grows. Minecraft 26.3 creates and frees a texture per sprite while
+    // stitching atlases, so without reuse the 4096 descriptor slots run out during resource loading.
+    std::deque<uint32_t> freeIds_;
     std::shared_ptr<Emission> emission_;
     std::mutex emissionMtx_;
     uint32_t nextID = 0;
