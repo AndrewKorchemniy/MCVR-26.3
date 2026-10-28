@@ -168,6 +168,30 @@ JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_prese
     framework->present();
 }
 
+// Vanilla submits to the shared graphics queue without locking, while MCVR also submits to it from
+// worker threads (texture uploads, BLAS batches) when there is no separate compute queue. Java wraps
+// vanilla's submits and waits in these calls so both sides share MCVR's queue mutex. The device locked
+// is remembered per thread, so an unlock always releases what its lock acquired even if the renderer
+// closes in between.
+namespace {
+thread_local std::vector<std::shared_ptr<vk::Device>> lockedQueueDevices;
+}
+
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_lockGraphicsQueue(JNIEnv *, jclass) {
+    auto *renderer = Renderer::try_instance();
+    auto framework = renderer == nullptr ? nullptr : renderer->framework();
+    auto device = framework == nullptr ? nullptr : framework->device();
+    if (device != nullptr) device->mainQueueMutex().lock();
+    lockedQueueDevices.push_back(device);
+}
+
+JNIEXPORT void JNICALL Java_com_radiance_client_proxy_vulkan_RendererProxy_unlockGraphicsQueue(JNIEnv *, jclass) {
+    if (lockedQueueDevices.empty()) return;
+    auto device = lockedQueueDevices.back();
+    lockedQueueDevices.pop_back();
+    if (device != nullptr) device->mainQueueMutex().unlock();
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_radiance_client_proxy_vulkan_RendererProxy_getPresentedFrameRate(JNIEnv *, jclass) {
     auto renderer = Renderer::try_instance();
