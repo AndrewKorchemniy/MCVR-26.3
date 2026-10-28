@@ -204,6 +204,9 @@ if (isFirstInterfaceReflection) { firstInterfaceFlags |= ADV_PATH_FLAG_FIRST_INT
 if (action == ADV_MEDIA_ACTION_REFLECT && currentMedium != ADV_MEDIUM_GLASS && nextMedium == ADV_MEDIUM_GLASS &&
     (surface.roughness > 0.01 || surface.metallic < 1.0)) {
     action = ADV_MEDIA_ACTION_STOP;
+    // The path ends on this glass surface; the transmission pass continues through it, and only does so for paths whose
+    // bounce count reaches the split bounce.
+    if (splitBounce != 0u) { bounceCount = splitBounce; }
 }
 
 bool shouldProvidePrimaryRefractionGuide = ADV_PRIMARY_FIRST_SEGMENT &&
