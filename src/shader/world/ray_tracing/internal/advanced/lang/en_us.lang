@@ -34,6 +34,7 @@ render_pipeline.module.main_render.attribute.temporal_confidence_cap=Temporal Hi
 render_pipeline.module.main_render.attribute.direct_light_strength=Direct Light Strength
 render_pipeline.module.main_render.attribute.indirect_light_strength=Indirect Light Strength
 render_pipeline.module.main_render.attribute.basic_radiance=Basic Radiance
+render_pipeline.module.main_render.attribute.emission_strength=Emission Strength
 render_pipeline.module.main_render.attribute.sun_radiance=Sun Radiance
 render_pipeline.module.main_render.attribute.moon_radiance=Moon Radiance
 render_pipeline.module.main_render.attribute.should_distort_water_surface=Water Surface Distortion
@@ -58,6 +59,7 @@ render_pipeline.module.main_render.attribute.temporal_confidence_cap.description
 render_pipeline.module.main_render.attribute.direct_light_strength.description=Controls direct illumination from visible light sources.
 render_pipeline.module.main_render.attribute.indirect_light_strength.description=Controls emissive lighting received through indirect bounces.
 render_pipeline.module.main_render.attribute.basic_radiance.description=Controls the base ambient brightness in very dark regions.
+render_pipeline.module.main_render.attribute.emission_strength.description=Scales how brightly light sources such as torches, glowstone and portals glow and light their surroundings.
 render_pipeline.module.main_render.attribute.sun_radiance.description=Controls the color and brightness of sunlight.
 render_pipeline.module.main_render.attribute.moon_radiance.description=Controls the color and brightness of moonlight.
 render_pipeline.module.main_render.attribute.should_distort_water_surface.description=Controls refraction distortion caused by water waves.

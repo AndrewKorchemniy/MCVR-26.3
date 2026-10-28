@@ -3,6 +3,10 @@
 
 #include "lighting/restir/packing.glsl"
 
+#ifndef ADV_EMISSION_SCALE
+#    define ADV_EMISSION_SCALE 1.0
+#endif
+
 RestirTarget invalidRestirTarget() {
     RestirTarget target;
     target.isValid = false;
@@ -87,8 +91,9 @@ float evaluateRestirTarget(RestirTarget target,
 
     DirectBrdf brdf =
         evaluateDirectBrdf(target.shadingNormal, lightDirection, target.viewDirection, target.f0, target.roughness);
-    vec3 lightScale =
-        float(ADV_RESTIR_DIRECT_LIGHT_STRENGTH) * max(lightRadiance, vec3(0.0)) * (emitterCosine / distanceSquared);
+    // The emission strength setting scales emitters both where they are seen and where they light the scene.
+    vec3 lightScale = float(ADV_RESTIR_DIRECT_LIGHT_STRENGTH) * float(ADV_EMISSION_SCALE) *
+                      max(lightRadiance, vec3(0.0)) * (emitterCosine / distanceSquared);
     vec3 materialDiffuseAlbedo = diffuseAlbedo(target.albedo, target.metallic) * target.opacity;
     diffuseContribution = lightScale * brdf.diffuse * materialDiffuseAlbedo * target.throughput;
     if (!isBrdfFinite(diffuseContribution)) { diffuseContribution = vec3(0.0); }

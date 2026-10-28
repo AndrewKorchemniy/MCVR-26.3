@@ -213,7 +213,7 @@ bool decodeSurface(
     }
     if (usesSurfaceMaterial && shouldUseOverlay) {
         vec4 overlay =
-            sampleTexture(textures[nonuniformEXT(worldUBO.overlayTextureID)], vec2(m0.overlayUV), 0.0, false);
+            sampleOverlayTexture(textures[nonuniformEXT(worldUBO.overlayTextureID)], ivec2(m0.overlayUV));
         tint = max(mix(overlay.rgb, tint, overlay.a), vec3(0.0));
     }
     if (usesSurfaceMaterial && shouldUseGlint) {
@@ -238,7 +238,10 @@ bool decodeSurface(
     if (usesSurfaceMaterial) {
         shadingNormal = applyNormalMap(material.normal, tangent, bitangent, geometryNormal, -rayDirection);
         float vertexEmission = bary.x * m0.albedoEmission + bary.y * m1.albedoEmission + bary.z * m2.albedoEmission;
-        emission = max(tint * (material.emission + vertexEmission) * float(ADV_EMISSION_SCALE), vec3(0.0));
+        // A translucent emitter (the nether portal) covers only surfaceAlpha of the pixel; the rest shows what is behind
+        // it. Full-strength emission on top of the transmitted light made such surfaces read as opaque.
+        emission = max(tint * (material.emission + vertexEmission) * float(ADV_EMISSION_SCALE) * surfaceAlpha,
+                       vec3(0.0));
     }
 
     if (isWater) {

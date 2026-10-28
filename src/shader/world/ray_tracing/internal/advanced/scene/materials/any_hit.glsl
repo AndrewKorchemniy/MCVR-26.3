@@ -191,7 +191,7 @@ AnyHitMaterial loadAnyHitMaterial(vec2 hitAttributes,
         vec3 shadowTint = material.tint;
         if (hasOverlay(packedData)) {
             vec4 overlay =
-                sampleTexture(textures[nonuniformEXT(worldUBO.overlayTextureID)], vec2(m0.overlayUV), 0.0, false);
+                sampleOverlayTexture(textures[nonuniformEXT(worldUBO.overlayTextureID)], ivec2(m0.overlayUV));
             shadowTint = max(mix(overlay.rgb, shadowTint, overlay.a), vec3(0.0));
         }
         if (hasGlint(packedData)) {

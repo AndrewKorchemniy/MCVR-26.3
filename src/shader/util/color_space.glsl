@@ -54,6 +54,14 @@ vec4 sampleTexture(sampler2D tex, ivec2 coord, int lod, bool isSRGB) {
     return applySrgbToLinear(texelFetch(tex, coord, lod), isSRGB);
 }
 
+// Minecraft's entity overlay coordinates are texel indices (vanilla shaders texelFetch them), not UVs. Sampling them
+// as UVs wraps "no overlay" (0, 10) onto the red hurt row whenever the texture's sampler repeats.
+vec4 sampleOverlayTexture(sampler2D tex, ivec2 coord) {
+    ivec2 size = textureSize(tex, 0);
+    if (size.x <= 0 || size.y <= 0) { return vec4(1.0); }
+    return sampleTexture(tex, clamp(coord, ivec2(0), size - 1), 0, false);
+}
+
 vec2 clampAtlasTextureUv(vec2 uv, vec2 atlasUvMin, vec2 atlasUvMax, ivec2 size) {
     vec2 minUv = min(atlasUvMin, atlasUvMax);
     vec2 maxUv = max(atlasUvMin, atlasUvMax);

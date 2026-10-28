@@ -34,6 +34,7 @@ render_pipeline.module.main_render.attribute.temporal_confidence_cap=时间历�
 render_pipeline.module.main_render.attribute.direct_light_strength=直接光强度
 render_pipeline.module.main_render.attribute.indirect_light_strength=间接光强度
 render_pipeline.module.main_render.attribute.basic_radiance=基础辐亮度
+render_pipeline.module.main_render.attribute.emission_strength=自发光强度
 render_pipeline.module.main_render.attribute.sun_radiance=太阳光亮度
 render_pipeline.module.main_render.attribute.moon_radiance=月亮光亮度
 render_pipeline.module.main_render.attribute.should_distort_water_surface=水面扭曲
@@ -58,6 +59,7 @@ render_pipeline.module.main_render.attribute.temporal_confidence_cap.description
 render_pipeline.module.main_render.attribute.direct_light_strength.description=控制可见光源的直接照明强度。
 render_pipeline.module.main_render.attribute.indirect_light_strength.description=控制间接反弹接收的自发光强度。
 render_pipeline.module.main_render.attribute.basic_radiance.description=控制极暗区域的基础环境亮度。
+render_pipeline.module.main_render.attribute.emission_strength.description=控制火把、荧石、传送门等光源的发光与照明强度。
 render_pipeline.module.main_render.attribute.sun_radiance.description=控制太阳光的颜色与亮度。
 render_pipeline.module.main_render.attribute.moon_radiance.description=控制月光的颜色与亮度。
 render_pipeline.module.main_render.attribute.should_distort_water_surface.description=控制水面波浪造成的折射扭曲。

@@ -218,7 +218,7 @@ bool decodeSurfaceMaterial(HitPayload hit,
     }
     if (shouldUseOverlay) {
         vec4 overlay =
-            sampleTexture(textures[nonuniformEXT(worldUBO.overlayTextureID)], vec2(m0.overlayUV), 0.0, false);
+            sampleOverlayTexture(textures[nonuniformEXT(worldUBO.overlayTextureID)], ivec2(m0.overlayUV));
         tint = max(mix(overlay.rgb, tint, overlay.a), vec3(0.0));
     }
     if (shouldUseGlint) {
@@ -253,7 +253,9 @@ bool decodeSurfaceMaterial(HitPayload hit,
 
     float vertexEmission =
         geometry.bary.x * m0.albedoEmission + geometry.bary.y * m1.albedoEmission + geometry.bary.z * m2.albedoEmission;
-    vec3 emission = max(tint * (material.emission + vertexEmission) * float(ADV_EMISSION_SCALE), vec3(0.0));
+    // Scaled by coverage like the primary surface; see scene/surface.glsl.
+    vec3 emission =
+        max(tint * (material.emission + vertexEmission) * float(ADV_EMISSION_SCALE) * surfaceAlpha, vec3(0.0));
     if (isWater) {
         surfaceAlpha = 0.0;
         material.f0 = vec3(0.02);
