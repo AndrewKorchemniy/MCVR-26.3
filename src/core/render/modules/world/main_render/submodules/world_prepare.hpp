@@ -15,6 +15,7 @@ class Framework;
 struct FrameworkContext;
 class MainRenderModule;
 struct ChunkGeometryMetadataCache;
+struct ChunkGeometryMetadataView;
 struct ChunkRenderData;
 struct MainRenderModuleContext;
 struct Entity;
@@ -118,7 +119,7 @@ struct WorldPrepareContext : public SharedObject<WorldPrepareContext> {
                                   std::vector<uint64_t> &lastIndexBufferAddrs,
                                   std::vector<uint64_t> &lastPbrBufferAddrs,
                                   std::vector<glm::mat4> &lastObjToWorldMats,
-                                  const ChunkGeometryMetadataCache &chunkMetadata,
+                                  const ChunkGeometryMetadataView &chunkMetadata,
                                   uint32_t entityHitGroupCount,
                                   glm::dvec3 cameraPos);
     void setupHitGroupSbt(const std::unordered_map<std::string, uint32_t> &hitGroupNameToIndex,

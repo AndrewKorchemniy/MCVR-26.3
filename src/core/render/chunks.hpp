@@ -218,7 +218,18 @@ struct ChunkGeometryMetadataCache {
     void clearRasterDrawDirtySlots();
 };
 
-struct ChunkBuildDataBatch : public SharedObject<ChunkBuildDataBatch> {
+// The part of ChunkGeometryMetadataCache that frame recording needs once the chunk lock is released: counts and the
+// GPU buffers. Taking this instead of a full copy avoids copying every metadata vector each frame.
+struct ChunkGeometryMetadataView {
+    size_t renderRecordCount = 0;
+    size_t geometrySlotCount = 0;
+    size_t actualGeometryCount = 0;
+    std::shared_ptr<vk::DeviceLocalBuffer> renderRecordBuffer;
+    std::shared_ptr<vk::DeviceLocalBuffer> indexBufferAddressBuffer;
+    std::shared_ptr<vk::DeviceLocalBuffer> pbrBufferAddressBuffer;
+};
+
+struct ChunkBuildDataBatch: public SharedObject<ChunkBuildDataBatch> {
     std::vector<std::shared_ptr<ChunkBuildData>> batchData;
     std::shared_ptr<vk::DeviceLocalBuffer> indexBuffer;
     std::shared_ptr<vk::DeviceLocalBuffer> pbrBuffer;

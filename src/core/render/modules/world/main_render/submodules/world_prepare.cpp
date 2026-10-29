@@ -250,7 +250,7 @@ void WorldPrepareContext::prepareRayTracingBuffers(std::vector<VkAccelerationStr
                                                    std::vector<uint64_t> &lastIndexBufferAddrs,
                                                    std::vector<uint64_t> &lastPbrBufferAddrs,
                                                    std::vector<glm::mat4> &lastObjToWorldMats,
-                                                   const ChunkGeometryMetadataCache &chunkMetadata,
+                                                   const ChunkGeometryMetadataView &chunkMetadata,
                                                    uint32_t entityHitGroupCount,
                                                    glm::dvec3 cameraPos) {
     MCVR_PROFILE_SCOPE("native.WorldPrepareContext.prepareRayTracingBuffers");
@@ -265,7 +265,7 @@ void WorldPrepareContext::prepareRayTracingBuffers(std::vector<VkAccelerationStr
 
     const uint32_t entityInstanceCount = static_cast<uint32_t>(entityInstances.size());
     const uint32_t entityGeometryCount = static_cast<uint32_t>(indexBufferAddrs.size());
-    const uint32_t chunkInstanceCount = static_cast<uint32_t>(chunkMetadata.renderRecords.size());
+    const uint32_t chunkInstanceCount = static_cast<uint32_t>(chunkMetadata.renderRecordCount);
     const uint32_t chunkGeometrySlotCount = static_cast<uint32_t>(chunkMetadata.geometrySlotCount);
     const uint32_t totalInstanceCount = entityInstanceCount + chunkInstanceCount;
     const uint32_t totalGeometryCount = entityGeometryCount + chunkGeometrySlotCount;
@@ -736,7 +736,7 @@ void WorldPrepareContext::render(ShaderPackLoader::AccelerationStructureBuildMod
     }
     auto &instanceBuilder = tlasBuilder->beginInstanceBuilder();
     int blasIndex = 0;
-    ChunkGeometryMetadataCache chunkGeometryMetadataSnapshot;
+    ChunkGeometryMetadataView chunkGeometryMetadataSnapshot;
     {
         MCVR_PROFILE_SCOPE("native.WorldPrepareContext.snapshotChunkMetadata");
         std::unique_lock<std::recursive_mutex> lock(chunks->mutex());
@@ -833,11 +833,16 @@ void WorldPrepareContext::render(ShaderPackLoader::AccelerationStructureBuildMod
                 chunkGeometryMetadataCache.hitGroupDirtyRanges.size() * sizeof(ChunkMetadataUpdateRangeInfo) +
                 chunkGeometryMetadataCache.rasterDrawDirtySlots.size() * sizeof(uint32_t);
             MCVR_PROFILE_METRIC("world_prepare.chunk_metadata_snapshot_bytes", snapshotBytes);
-            chunkGeometryMetadataSnapshot = chunkGeometryMetadataCache;
+            chunkGeometryMetadataSnapshot = {chunkGeometryMetadataCache.renderRecords.size(),
+                                             chunkGeometryMetadataCache.geometrySlotCount,
+                                             chunkGeometryMetadataCache.actualGeometryCount,
+                                             chunkGeometryMetadataCache.renderRecordBuffer,
+                                             chunkGeometryMetadataCache.indexBufferAddressBuffer,
+                                             chunkGeometryMetadataCache.pbrBufferAddressBuffer};
         }
     }
     const auto &chunkGeometryMetadataCache = chunkGeometryMetadataSnapshot;
-    const size_t chunkInstanceCount = chunkGeometryMetadataCache.renderRecords.size();
+    const size_t chunkInstanceCount = chunkGeometryMetadataCache.renderRecordCount;
     const size_t chunkGeometrySlotCount = chunkGeometryMetadataCache.geometrySlotCount;
     const size_t chunkGeometryCount = chunkGeometryMetadataCache.actualGeometryCount;
 
